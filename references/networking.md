@@ -12,9 +12,11 @@
 - [Direct port access](#direct-port-access)
 - [Firewall](#firewall)
 - [L7 balancer](#l7-balancer)
+- [CDN](#cdn)
 - [Cloudflare](#cloudflare)
 - [VPN](#vpn)
 - [Getting a shell](#getting-a-shell)
+- [Local development](#local-development)
 
 ## Architecture
 
@@ -94,17 +96,24 @@ https://appdev-1df2-3000.prg1.zerops.app
 Port 80 omits the port suffix. **Every HTTP port gets its own subdomain**, and the subdomain route
 only materialises once a deploy has declared that HTTP port.
 
-**Do not compose this URL from memory.** Upstream is inconsistent about whether the
-`zeropsSubdomainHost` variable holds the bare prefix (`1df2`) or the whole host
-(`1df2.prg1.zerops.app`), and the two readings produce different — one of them broken — URLs. Read
-the actual value instead of assuming:
+**`zeropsSubdomainHost` holds the bare prefix** — verified live it is e.g. `291e`, not the whole
+host. But you rarely need to assemble the URL yourself: there is an **undocumented but present
+project variable `zeropsSubdomainString`** that carries the full template with the host already
+filled in, e.g. `https://${hostname}-291e-${port}.prg1.zerops.app` (and on a specific service the
+hostname is already substituted). Read one of them instead of composing from memory:
 
 ```sh
 zcli project env --service app | grep -i subdomain
+# zeropsSubdomainHost=291e
+# zeropsSubdomainString=https://app-291e-${port}.prg1.zerops.app
 ```
 
 or take the link from the service detail page in the GUI. To verify an app is up without depending
 on any of this, curl it internally: `curl http://app:3000/health` from a sibling or over the VPN.
+
+`enableSubdomainAccess: true` in the import YAML does not necessarily flip the toggle on immediately
+for a not-yet-deployed service — if the subdomain does not appear, enable it explicitly with
+`zcli service enable-subdomain <service>` (or the GUI toggle) once the service has deployed.
 
 Limitations: shared HTTPS balancer across all Zerops projects (scalability bottleneck), hard
 **50 MB** upload cap, not configurable. Development and testing only.
@@ -191,6 +200,11 @@ The consequence that bites most often is **email**: port **587 (STARTTLS) is the
 port**; 25 and 465 are permanently blocked. A perfectly ordinary `SMTP_PORT: "465"` silently never
 connects.
 
+**Verified live, and the failure mode matters:** the firewall **drops, it does not reject**. A probe
+to `587` connects in ~0 s; probes to `465` and `25` **hang until timeout** (~16 s each in the test),
+returning a timeout, not an instant connection-refused. So a wrong SMTP port does not fail fast —
+the app stalls on every send. Budget for that when you see mysterious multi-second hangs in a mailer.
+
 | Provider | Host | Port |
 |---|---|---|
 | SendGrid | `smtp.sendgrid.net` | 587 (username `apikey`) |
@@ -225,6 +239,57 @@ Key defaults, adjustable under **Advanced balancer configuration**:
 GUI-configurable routing features: redirects (301/302/307/308 with `preservePath` /
 `preserveQuery`), CIDR access policies (403 on deny), per-IP or per-domain rate limiting with burst
 queue (503 when exceeded), HTTP basic auth per location, and custom static content responses.
+
+## CDN
+
+nginx + Cloudflare geo-steering across six regions: Prague and Falkenstein (EU, also the global
+fallback), London, Sydney, Singapore, Beauharnois. DNS TTL is 30 s, so node failover is fast, and EU
+is always served if everything else is down.
+
+Two modes today:
+
+| Mode | Serves | URL | Project env var |
+|---|---|---|---|
+| **Object storage** | files in a Zerops object-storage bucket | `https://storage.cdn.zerops.app/<bucket>/path` | `${storageCdnUrl}` |
+| **Static** | static assets behind a custom domain | `https://static.cdn.zerops.app/<domain>/path` | `${staticCdnUrl}` |
+
+An API mode (`${apiCdnUrl}`) is announced but not released.
+
+- Object-storage mode: enable the CDN option on the service, then set a **public read** policy —
+  private objects are never cached, they always fall through to origin.
+- Static mode: enable **"Enable CDN for static files"** on the domain in the L7 balancer section.
+  **Wildcard domains are not supported**; use specific names.
+- Test one node directly with `https://{cz|de|uk|au|sg|ca}-{storage|static}.cdn.zerops.app/…`.
+
+### Caching
+
+**A fixed 30-day TTL, and HTTP caching headers do not influence it.** `Cache-Control`, `Expires` and
+`Pragma` still drive *browser* caching, but the CDN ignores them. Content is evicted early only by
+capacity (LRU) or an explicit purge. Version your filenames if you need immediate turnover.
+
+```sh
+zsc cdn purge example.com            # whole domain
+zsc cdn purge example.com "/*"       # everything
+zsc cdn purge example.com "/images/" # a directory
+zsc cdn purge example.com "/css/main.css$"
+```
+
+`zsc cdn purge` runs from **any container in the project** that has the CDN-enabled domain active,
+and **only works for static mode**. Object-storage purges go through REST:
+
+```sh
+curl -X PUT "https://api.app-prg1.zerops.io/api/rest/public/service-stack/$SERVICE_ID/purge-cdn/*" \
+  -H "Authorization: Bearer $TOKEN"
+curl -X PUT "https://api.app-prg1.zerops.io/api/rest/public/project/$PROJECT_ID/purge-cdn/static/$DOMAIN/*" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Pattern rules: a `*` wildcard must be **at the end**, a specific file must end with `$`, and nested
+wildcards (`/dir/*.jpg`) are unsupported.
+
+The `${storageCdnUrl}` / `${staticCdnUrl}` project variables only reach a container after a
+**restart**. Services created before the CDN feature shipped may need a dummy project variable added
+and removed to force the variable set to regenerate.
 
 ## Cloudflare
 
@@ -312,3 +377,63 @@ Web terminal access bypasses all of these, always.
 
 If an SSH connection is refused, check `sshIsolation` before assuming a network fault — and use the
 web terminal in the meantime.
+
+## Local development
+
+Development on Zerops is **network-first**: every path below puts you on the same project-private
+network, with the same hostnames, managed services and pipeline that staging and production use.
+What differs between environments is policy — credentials, resources, data, release authority — not
+the platform. Switching paths needs no reprovisioning.
+
+| | Local + VPN | Cloud IDE | Native IDE over SSH |
+|---|---|---|---|
+| Editor runs | local | browser | local |
+| Toolchain | local | hosted workspace | workspace or service container |
+| Network entry | WireGuard VPN | browser into the project | VPN, then SSH |
+| Hosted workspace | not needed | required | optional |
+| Git auth | your local credentials | `gh auth login`, or a token in the workspace's `envSecrets` | SSH agent forwarding |
+| Best for | keeping your existing setup | zero local setup, disposable envs | native UX, lighter laptop |
+
+**Local + VPN** — `zcli vpn up <project-id>`, then point your normal dev loop at `db:5432`,
+`cache:6379`, `api:3000` instead of Docker Compose. No `zcli push`, no new editor.
+
+**Cloud IDE** — a normal Zerops service in the project with Browser VS Code, `zcli`, git tooling and
+database clients. It can mount other services' runtime files (`/var/www/apidev`), so you can edit
+code that runs in a different container. Reachable **VPN-only** (most secure) or on a `.zerops.app`
+subdomain behind an auto-generated password.
+
+**Native IDE over SSH** — once the VPN is up, `ssh apidev` works from VS Code Remote SSH, JetBrains
+Gateway, Cursor, Zed or plain `ssh`. Agent forwarding keeps git pushes on your laptop's key:
+
+```ssh-config
+Host apidev.zerops
+    HostName apidev
+    ForwardAgent yes
+```
+
+### The env-variable gap
+
+**The VPN gives network reachability, not the env store** — this is the thing that bites. Options,
+in order of preference:
+
+1. Generate a local `.env` with `zcp` (`zerops_env action="generate-dotenv"`), which resolves
+   `${db_password}`-style references to real values —
+   [`zcp-mcp.md`](zcp-mcp.md#generating-a-local-env).
+2. Copy connection details from the service detail page (**Peek access details**).
+
+Either way `.env` goes into `.gitignore` immediately, and it is a snapshot — regenerate it after any
+env change in Zerops.
+
+### Diagnosing a local connection
+
+```sh
+nc -zv db 5432 -w 3          # reachability — use this, not dig/nslookup
+zcli vpn up <project-id>     # reconnect; one project at a time
+```
+
+| Symptom | Cause |
+|---|---|
+| `nc` times out | VPN down, or connected to the wrong project |
+| Connects but auth fails | stale `.env` — regenerate |
+| Name does not resolve | try the `.zerops` suffix; `dig`/`nslookup`/`host` bypass the system resolver and report false NXDOMAIN over the VPN |
+| Service unreachable | the service is stopped, not a network fault |

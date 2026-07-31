@@ -127,11 +127,13 @@ auto-injected. Examples below assume the service hostname `db` / `storage`.
 | `connectionTlsString` | same, via `6432` |
 | `connectionStringReplicas` | `…@${hostname}:5433` (HA only) |
 
-- **Whether `connectionString` already ends in `/${dbName}` is contested upstream** — the PostgreSQL
-  reference page shows it with the database path, the newer guide without. Appending blindly gives
-  you `…/db/db`. Read the real value before deciding:
-  `zcli project env --service db | grep connectionString`. From a sibling service the database name
-  is `${db_dbName}`, never a bare `${dbName}` (which would not resolve).
+- **`connectionString` does NOT include the database path** — verified live on `postgresql:single@18`
+  it is exactly `postgresql://db:<password>@db:5432`, no trailing `/db`. (Upstream is contested: the
+  PostgreSQL reference page shows it with the path, the newer guide without — the guide is right.)
+  So append `/${db_dbName}` yourself if your driver needs the database in the URL; appending when the
+  value already had it would give `…/db/db`, but it does not. From a sibling service the database
+  name is `${db_dbName}`, never a bare `${dbName}` (which would not resolve). If unsure on another
+  version, read it: `zcli project env --service db | grep connectionString`.
 - `5432`/`5433` do not support TLS — connect with `sslmode=disable`. Requesting TLS fails the
   handshake. Security comes from the private network / VPN tunnel.
 - `6432` **requires** TLS (`sslmode=require` is enough; `verify-full` needs the Zerops CA). Prefer
@@ -180,7 +182,7 @@ No TLS; cannot be exposed publicly. Prefer Valkey for new projects.
 | `apiUrl` | full `https://…` S3 endpoint — use this for any SDK's `endpoint` option |
 | `apiHost` | host only, no scheme |
 | `accessKeyId` / `secretAccessKey` | S3 credentials |
-| `bucketName` | `<hostname>` + random prefix, immutable |
+| `bucketName` | `<prefix>-<hostname>`, immutable (e.g. `4gl2o-storage`) — the random prefix comes **first**; never compose it from the hostname, read `${storage_bucketName}` |
 | `quotaGBytes` | bucket quota |
 | `projectId`, `serviceId`, `hostname` | identifiers |
 

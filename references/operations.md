@@ -177,7 +177,9 @@ from healthy copies, and removes the failed one. PostgreSQL HA also exposes read
 `:single` → `:ha` is a **new service**, not an edit, and hostnames are unique within a project — so
 this is a data migration, not a toggle. Do not start by deleting anything.
 
-1. **Back up** with a protected tag: `zcli backup create db --tags pre-ha-migration,protected`.
+1. **Back up, then protect the tag in the GUI.** `zsc backup-create db` from any container creates
+   it; tagging is not available headlessly, so add `protected` in **Backups List & Configuration**
+   before continuing — an untagged manual backup is prunable.
 2. **Create the new service** under a different hostname (`dbha`), with the `:ha` variant. Set
    `profile` explicitly — HA defaults to `oltp-production`, which over-provisions.
 3. **Move the data** over the VPN: `pg_dump`/`pg_restore` from old to new, or restore the downloaded
@@ -291,12 +293,19 @@ destroyed and the data is unrecoverable.
 
 ### Taking one before a risky change
 
+**There is no `zcli backup` command** — `features/backup.mdx` documents `zcli backup create … --tags`
+but it does not exist in v1.1.0, the current release. The headless path is from inside any container
+in the project:
+
 ```sh
-zcli backup create db --tags pre-migration,protected
+zsc backup-create db
 ```
 
-This is the only headless backup command; listing, deletion and tag management are GUI-only.
-`zsc backup-create <stackName>` does the same from inside a container.
+It takes a service name and nothing else. **It cannot set tags**, so a headless backup is untagged —
+and per the retention rules above, an untagged manual backup gets no automatic time tag and can be
+pruned. To take a genuinely protected pre-migration backup, tag it in the GUI (**Backups List &
+Configuration**) right after creating it, or create it there in the first place. Listing, deletion,
+retention and download are GUI-only regardless.
 
 ### Restoring
 

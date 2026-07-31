@@ -159,7 +159,8 @@ services:
     priority: 10
 ```
 
-One bucket per service, auto-named `<hostname>` + random prefix, immutable. Need more buckets?
+One bucket per service, auto-named `<prefix>-<hostname>` (random prefix first, e.g.
+`4gl2o-storage`), immutable. Need more buckets?
 Add more services. Not covered by Zerops backups; no autoscaling.
 
 ## Embedding `zerops.yaml`

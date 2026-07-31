@@ -17,6 +17,7 @@ build and deploy. Schema: `https://api.app-prg1.zerops.io/api/rest/public/settin
 - [Cron](#cron)
 - [`envReplace`](#envreplace)
 - [`routing` (static services only)](#routing-static-services-only)
+- [PHP runtime tuning](#php-runtime-tuning)
 - [Working directories](#working-directories)
 - [Gotchas](#gotchas)
 
@@ -147,10 +148,16 @@ A `.deployignore` file in the repo root excludes paths, using `.gitignore` patte
 `/` anchors to root; without it the pattern matches at any depth). It also applies to
 `zcli service deploy`.
 
-**Do not mirror `.gitignore` into it blindly.** `.gitignore` excludes `node_modules` and `vendor` —
-exactly the directories `deployFiles` must ship. An app deployed with both files aligned starts and
-then dies on a missing module, with nothing in the build log. If you keep the two files similar,
-re-add the dependency directories in `.deployignore` with a `!` negation, or list them explicitly
+**Do not mirror `.gitignore` into it blindly — this contradicts upstream, deliberately.** Every
+per-language build-pipeline page says *"For consistency, it's recommended to configure both your
+`.gitignore` and `.deployignore` files with the same patterns."* Followed literally that advice
+breaks unbundled apps: `.gitignore` excludes `node_modules` and `vendor` — exactly the directories
+`deployFiles` must ship, because nothing reinstalls dependencies at runtime. The app deploys
+cleanly, then dies on a missing module with nothing in the build log.
+
+The two files answer different questions — *what does not belong in version control* vs *what does
+not belong in the runtime filesystem* — and only overlap by accident. If you do keep them similar,
+re-add the dependency directories in `.deployignore` with a `!` negation, or list them explicitly,
 and verify they arrived (`ls /var/www` over SSH or the web terminal).
 
 ### `cache`
@@ -353,8 +360,13 @@ config files that cannot read env vars.
 ## `routing` (static services only)
 
 **SPA routing needs no configuration.** A static service already falls back through `$uri` →
-`$uri.html` → `$uri/index.html` → `/index.html` → 404. Adding a `/*` → `/index.html` redirect
-breaks the site: every JS and CSS request gets redirected instead of served. Use `routing` only for
+`$uri.html` → `$uri/index.html` → `/index.html` → 404, and upstream states plainly that SPAs work
+out of the box and *"you don't need to add any custom redirects for client-side routing to work."*
+
+A catch-all `/*` → `/index.html` **redirect** is therefore at best redundant. It is also risky:
+`redirects` emit an HTTP 3xx rather than serving the fallback internally, so a rule broad enough to
+match every path also matches `/assets/app.js`. Upstream does not document this failure mode — but
+the fallback above already does the job, so there is no reason to find out. Use `routing` only for
 genuine redirects, headers and CORS.
 
 ```yaml
@@ -385,6 +397,72 @@ run:
 
 Silently ignored on non-static services.
 
+## PHP runtime tuning
+
+`php-nginx` / `php-apache` are configured with environment variables, not an ini file you ship:
+`PHP_INI_<directive>` for php.ini, `PHP_FPM_<setting>` for the FPM pool. Set them in
+`run.envVariables`.
+
+```yaml
+run:
+  base: php-nginx@8.4
+  envVariables:
+    PHP_INI_upload_max_filesize: 10M
+    PHP_INI_post_max_size: 12M
+    PHP_INI_memory_limit: 256M
+    PHP_INI_max_execution_time: 60
+    PHP_FPM_PM_MAX_CHILDREN: 50
+    PHP_FPM_PM_START_SERVERS: 10
+```
+
+Zerops overrides several stock defaults: `upload_max_filesize` and `post_max_size` **1024M** (vs 2M
+/ 8M), `display_errors` off, `log_errors` on, `error_reporting` 22527, `output_buffering` 4096,
+`date.timezone` UTC, `sendmail_path` wired to the system sendmail.
+
+FPM defaults to `dynamic` with `MAX_CHILDREN` 20, `START_SERVERS` 2, `MIN_SPARE_SERVERS` 1,
+`MAX_SPARE_SERVERS` 3, `MAX_SPAWN_RATE` 32, `MAX_REQUESTS` 500. `PHP_FPM_PM: ondemand` spawns
+workers only on demand (`PHP_FPM_PM_PROCESS_IDLE_TIMEOUT`, default `60s`) and suits low-traffic
+sites. Config is written to `/etc/php*/php-fpm.d/www.conf` at container start.
+
+**Applying a change depends on where the value lives** — see
+[`env-variables.md`](env-variables.md#when-changes-take-effect). A value in `run.envVariables` is
+baked into the app version, so it needs a **redeploy**; a value set as a service secret or in the GUI
+needs a **restart**. A reload rewrites the config files but never signals FPM to re-read them, so
+reload alone applies nothing.
+
+### Uploads pass three limits
+
+All three must allow the size, and PHP is usually not the one blocking:
+
+1. **L7 balancer** — `client_max_body_size`: **50 MB fixed on a `.zerops.app` subdomain** (not
+   configurable), 512 MB default on a custom domain, adjustable to 2048 MB.
+2. `upload_max_filesize` — 1024M by default.
+3. `post_max_size` — 1024M by default. **Must be ≥ `upload_max_filesize`**, or PHP silently drops
+   the POST body even when the file itself is under the upload limit.
+
+### Extensions
+
+Build and runtime are separate containers with separate images. The build base (`php@X`) is
+Alpine-minimal; the runtime bases bundle more, but not everything. Install with a version prefix
+matching PHP major+minor, under `sudo` (containers run as the `zerops` user):
+
+```yaml
+build:
+  base: php@8.4
+  prepareCommands:
+    - sudo apk add --no-cache php84-pcntl php84-posix
+run:
+  base: php-nginx@8.4
+  prepareCommands:
+    - sudo apk add --no-cache php84-pcntl php84-posix
+```
+
+Install in `build.prepareCommands` so Composer validates platform requirements properly, and again in
+`run.prepareCommands` if the extension is also needed at runtime. **Never reach for
+`--ignore-platform-reqs`** — it suppresses every platform check and turns a build error into a
+runtime crash. Commonly missing from the build base: `ext-pcntl`, `ext-posix` (Laravel Horizon),
+`ext-gd`, `ext-intl`.
+
 ## Working directories
 
 | Phase | cwd |
@@ -401,8 +479,12 @@ Silently ignored on non-static services.
 
 1. `run` is required; `build` and `deploy` are optional (a service can be deploy-only).
 2. There is **no `mount` key in `zerops.yaml`** — shared storage is attached via the `mount:` field
-   in the *import* YAML or in the GUI. A `run.mount` passes schema validation and is then silently
-   stripped: no mount, no error.
+   in the *import* YAML, in the GUI, or with `zsc shared-storage mount`. Upstream documents `mount:`
+   only for the import YAML and never lists it under `run`. **Verified live: a stray `run.mount`
+   (even pointing at a nonexistent storage) is silently accepted — the deploy goes `ACTIVE`, no
+   mount, no warning.** More broadly, **unknown keys under `run` are not rejected** (a bogus
+   `thisKeyDoesNotExist: true` also deploys clean), so a typo'd key never announces itself. Rely on
+   schema validation in the editor, not on the deploy to catch it.
 3. PHP uses different build and run bases: build `php@8.4`, run `php-nginx@8.4` or `php-apache@8.4`.
 4. Deno has no Alpine build — it requires `os: ubuntu`.
 

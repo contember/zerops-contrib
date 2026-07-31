@@ -122,11 +122,18 @@ run:
     db_hostname: ${db_hostname}    # WRONG — cross-service self-shadow
 ```
 
-The interpolator finds the service-level variable of that name first, cannot recurse back to the
-inherited value, and the container ends up with the literal string `${API_URL}`.
+**Verified live it is worse than "resolves to a literal":** the self-shadowed variable **disappears
+from the container environment entirely** — it is not present as `${API_URL}` and not present with a
+value, it is simply absent. Code reading it gets undefined, not a wrong-looking string.
 
 - Reading a project variable → delete the line, it is already there.
 - Reading a sibling's variable → use a **different** left-hand name (`DB_HOST: ${db_hostname}`).
+
+**Escape hatch (undocumented, verified live):** every project variable is also injected under a
+`PROJECT_` prefix — `PROJECT_API_URL`, `PROJECT_staticCdnUrl`, etc. — and that copy is **not**
+shadowed by a service-level variable of the bare name. So `PROJECT_API_URL` still holds the real
+value even after `API_URL: ${API_URL}` has nuked `API_URL`. Useful as a recovery read; still, the
+right fix is to not self-shadow in the first place.
 
 ## Build and runtime
 
@@ -159,6 +166,19 @@ context. It is never used for project variables.
 - Generate them at import time with the [YAML preprocessor](import-yaml.md#yaml-preprocessor)
   rather than committing them.
 - `zsc setSecretEnv <key> <value>` updates one from inside a container (`-` reads stdin).
+
+**Security note — the container environment holds platform private keys.** Verified live, the
+build **and** runtime environment include `ZEROPS_VpnPrivateKey` (the WireGuard key), plus
+`ZEROPS_CertKey` / `ZEROPS_CertCrt` (an RSA private key and the service's internal mTLS identity).
+Consequences for how you write pipelines:
+
+- **Never dump the full environment to logs or an external service.** `env | …`, error reporters
+  that attach `process.env`, and debug endpoints that echo the environment will leak these keys.
+- The build phase runs third-party dependency code (`npm`/`composer` postinstall) with these keys
+  present, and build egress on 443 is open — a compromised dependency can exfiltrate them. Pin and
+  audit build dependencies; prefer lockfiles and `--ignore-scripts` where the toolchain allows.
+- Read only the specific variables your app needs; do not forward the whole environment to child
+  processes or subrequests.
 
 ```yaml
 services:
@@ -227,8 +247,20 @@ recursive.
 ## Local development
 
 Environment variables are **not** available over the VPN — the VPN gives network reachability, not
-the env store. Copy access details from the GUI, or generate a local `.env`. Add `.env` to
-`.gitignore` immediately.
+the env store. Two ways to bridge the gap:
+
+1. **Generate a local `.env`** with `zcp` (`zerops_env action="generate-dotenv"`). It merges project
+   `envVariables`, `zerops.yaml` `run.envVariables` and `.env.local`, resolving `${db_password}`-style
+   references recursively into real values — see [`zcp-mcp.md`](zcp-mcp.md#generating-a-local-env).
+   Put manual overrides in `.env.local`, not in `.env`; the next generation refuses with a diff when
+   it finds keys it did not write.
+2. **Copy access details from the GUI** (service detail → *Peek access details*).
+
+Either way `.env` goes into `.gitignore` immediately, and it is a snapshot rather than a live sync —
+regenerate it after changing anything in Zerops.
+
+The three access paths (VPN, Cloud IDE, native IDE over SSH) are in
+[`networking.md`](networking.md#local-development).
 
 `${hostname_varname}` references are resolved by Zerops at container start regardless of whether
 the push came from your laptop or from CI, so one `zerops.yaml` works everywhere.

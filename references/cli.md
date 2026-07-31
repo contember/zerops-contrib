@@ -1,11 +1,21 @@
 # CLI reference — `zcli` and `zsc`
 
-Two different tools:
+Three tools, three places:
 
 - **`zcli`** — runs on **your machine or CI**. Talks to the Zerops API: login, VPN, projects,
   services, push/deploy, logs.
 - **`zsc`** — preinstalled **inside every Zerops container** (build and runtime). Controls the
   container itself: scaling, installing bases, backups, cron, secrets.
+- **`zcp`** — an MCP server scoped to **one project**, for coding agents. Covers most of what
+  `zcli` cannot do (restart, scaling, env writes, events, verification). See
+  [`zcp-mcp.md`](zcp-mcp.md).
+- **`zz`** — a from-scratch CLI in this repository (`cli/`) generated from the API's OpenAPI
+  document, so all 228 documented operations are reachable, plus the 17 undocumented `/search`
+  endpoints `zcli` uses internally. Designed for agents: `--json` everywhere, meaningful exit
+  codes, name-based addressing, waits for async operations. See [`zz-cli.md`](zz-cli.md).
+
+All four authenticate with the same personal access token. Only `zz` has a raw REST passthrough
+(`zz api`).
 
 ## Contents
 
@@ -13,6 +23,7 @@ Two different tools:
 - [`zcli` configuration](#zcli-configuration)
 - [`zcli` commands](#zcli-commands)
 - [What `zcli` cannot do](#what-zcli-cannot-do)
+- [Roles and tokens](#roles-and-tokens)
 - [`zsc` commands](#zsc-commands)
 
 ## `zcli` install and auth
@@ -67,6 +78,13 @@ Special variables:
 - `ZEROPS_CLI_LOG_FILE_PATH` — custom debug log location. Default `/var/log/zcli.log`, falling back
   to `~/.config/zerops/zerops.log`. Written by `push` and `deploy`; add `-v/--verbose` for detail.
 
+**`ZEROPS_TOKEN` in the environment silently overrides `zcli login`.** Because any flag can be set
+via a `ZEROPS_`-prefixed env var, an exported `ZEROPS_TOKEN` (e.g. sourced from a `.env`) wins over
+whatever account you logged in as — every command then runs as that token regardless. Verified live:
+it surfaces as a spurious `insufficientPermissions` against a project the *logged-in* account can
+reach but the env token cannot. When switching accounts or projects, `unset ZEROPS_TOKEN` (or don't
+export it) so `zcli login` actually takes effect.
+
 ## `zcli` commands
 
 ### Account and VPN
@@ -75,7 +93,7 @@ Special variables:
 |---|---|
 | `zcli login <token>` | Authenticate |
 | `zcli logout` | Disconnect VPN and log out |
-| `zcli vpn up [project-id]` | Connect. `--auto-disconnect`, `--mtu int` (default 1420), `-P/--project-id` |
+| `zcli vpn up [project-id]` | Connect. `--auto-disconnect`, `--mtu int` (default 1420), `-P/--project-id`, `--skip-check-installation`, `--skip-dns-setup` (then use IPs, not hostnames), `--skip-vpn-test` |
 | `zcli vpn down` | Disconnect |
 
 ### Projects
@@ -83,7 +101,7 @@ Special variables:
 | Command | Notes |
 |---|---|
 | `zcli project list` | |
-| `zcli project create` | `--name`, `--org-id`, `--mode light\|serious`, `--tags`, `--env-isolation service\|none`, `--ssh-isolation` (default `vpn`), `--out` (Go template) |
+| `zcli project create` | `--name`, `--org-id`, `--mode light\|serious` (default `light`), `--tags`, `--env-isolation service\|none`, `--ssh-isolation` (default `vpn`), `--location` (primary/fallback location, e.g. `eu-central`), `--out` (Go template) |
 | `zcli project delete [project-id]` | `--confirm` skips the prompt |
 | `zcli project env` | Print project env vars. `--export` prefixes `export`, `--template`, `--service`, `--user-only` |
 | `zcli project project-import <file>` | Create project + services from import YAML. `--org-id`, `--working-dir` |
@@ -94,14 +112,20 @@ Special variables:
 | Command | Notes |
 |---|---|
 | `zcli service list` | |
-| `zcli service create` | `--name`, `--mode ha\|non_ha`, `--env`, `--env-file`, `--start-without-code`, `--noop` (create only if absent), `--zerops-yaml-path` |
+| `zcli service create` | `--name`, `--mode ha\|non_ha` (default `non_ha`), `--env` / `--env-file` (**both set secrets**, max 1 MiB), `--env-isolation`, `--ssh-isolation`, `--start-without-code`, `--noop` (create only if absent), `--working-dir`, `--zerops-yaml-path`, `--out` (Go template) |
 | `zcli service push [service]` | **Build in Zerops and deploy.** The usual way to ship. Alias: `zcli push` |
 | `zcli service deploy [service]` | Deploy pre-built artifacts, skipping the build phase |
 | `zcli service start\|stop [service]` | **There is no `zcli service restart`.** Restart = `stop` then `start`, or the GUI's Restart action |
 | `zcli service delete [service]` | `--confirm` |
 | `zcli service enable-subdomain [service]` | |
 | `zcli service log` | See below |
-| `zcli backup create <service>` | `--tags pre-deploy,protected`. The one headless command for taking a backup before a risky change. Listing, deletion and tag management are GUI-only |
+
+**There is no `zcli backup` command.** `features/backup.mdx` documents `zcli backup create <service>
+--tags …` and tells you to run `zcli backup --help`; neither exists in **v1.1.0**, the current
+release (verified against `zcli --help`, `zcli service --help` and `zcli project --help`). For a
+headless backup use `zsc backup-create <stackName>` from inside a container — which takes **no
+`--tags` flag**, so a *protected* tag cannot be set headlessly at all. See
+[backups](operations.md#backups).
 
 `zcli push` and the other service commands accept a service **name** as a positional argument, not
 only an ID.
@@ -111,20 +135,26 @@ only an ID.
 
 #### `push` / `deploy` flags
 
-| Flag | Meaning |
-|---|---|
-| `-P, --project-id` | Required with access to several projects |
-| `-S, --service-id` | Required with access to several services |
-| `--setup <name>` | Which `setup:` from `zerops.yaml` to use |
-| `--version-name <s>` | Custom version label (e.g. a git tag) |
-| `--working-dir <p>` | Default `./` |
-| `--zerops-yaml-path <p>` | Non-default config path |
-| `-w, --workspace-state` | `all` (default) / `clean` (HEAD without local changes) / `staged` |
-| `--no-git` | Upload the working directory as-is. Incompatible with `--workspace-state` and `--deploy-git-folder` |
-| `-g, --deploy-git-folder` | Include `.git/` |
-| `--archive-file-path <p>` | Also write a `tar.gz` of the uploaded code |
-| `--disable-logs` | Do not stream build logs |
-| `-v, --verbose` | Extra debug into the log file |
+The two commands do **not** share a flag set — verified against `--help` in v1.1.0.
+
+| Flag | `push` | `deploy` | Meaning |
+|---|---|---|---|
+| `-P, --project-id` | ✓ | ✓ | Required with access to several projects |
+| `-S, --service-id` | ✓ | ✓ | Required with access to several services |
+| `--setup <name>` | ✓ | ✓ | Which `setup:` from `zerops.yaml` to use |
+| `--version-name <s>` | ✓ | ✓ | Custom version label; auto-filled from `ZEROPS_VERSIONNAME` |
+| `--working-dir <p>` | ✓ | ✓ | Default `./` |
+| `--zerops-yaml-path <p>` | ✓ | ✓ | Non-default config path |
+| `-g, --deploy-git-folder` | ✓ | ✓ | Include `.git/` |
+| `--archive-file-path <p>` | ✓ | ✓ | Also write a `tar.gz` of the uploaded code |
+| `-v, --verbose` | ✓ | ✓ | Extra debug into the log file |
+| `-w, --workspace-state` | ✓ | — | `all` (default) / `clean` (HEAD without local changes) / `staged` |
+| `--no-git` | ✓ | — | Upload the working directory as-is. Incompatible with `--workspace-state` and `--deploy-git-folder` |
+| `--disable-logs` | ✓ | — | Do not stream build logs |
+| `--path-to-file-or-dir <p>` | — | ✓ | **What to deploy.** Repeatable, default `.` |
+
+`--path-to-file-or-dir` is the flag that makes `deploy` useful: it takes the pre-built artifacts
+directly, so `deployFiles` in `zerops.yaml` is not what selects them.
 
 `.deployignore` applies to both commands.
 
@@ -164,19 +194,28 @@ curl -fsSL https://raw.githubusercontent.com/zeropsio/zcli/main/install.sh | sh 
 
 ## What `zcli` cannot do
 
-A large part of day-2 management has no CLI command. Do not invent one — reach for the GUI or the
-REST API instead.
+A large part of day-2 management has no `zcli` command. Do not invent one — reach for `zz`
+([`zz-cli.md`](zz-cli.md)), `zcp`, the GUI, or the REST API instead.
 
-| Task | Surface |
-|---|---|
-| Restart a service | GUI (Restart), or `zcli service stop` + `start` |
-| Reload a service | GUI. Note a reload does **not** re-read environment variables |
-| Change scaling / CPU mode / container count | GUI → **Automatic scaling configuration**, or REST |
-| Roll back (activate an archived app version) | GUI → *Pipelines & CI/CD settings*, or REST `/app-version` |
-| Read appVersion status, build/deploy state | GUI, or REST `/app-version` |
-| Configure domains, ports, firewall rules | GUI, or REST `/public-http-routing`, `/public-port-routing` |
-| Backup schedule, retention, restore, download | GUI → **Backups List & Configuration** (`zcli backup create` covers creation only) |
-| Set or read env vars beyond `zcli project env` | GUI, or REST `/user-data`, `/project-env` |
+| Task | `zz` | Other surfaces |
+|---|---|---|
+| Restart a service | `zz service restart` | `zcp` `zerops_manage`, GUI (Restart), or `zcli service stop` + `start` |
+| Reload a service | `zz service reload` | `zcp` `zerops_manage`, or GUI. Note a reload does **not** re-read environment variables |
+| Change scaling / CPU mode / container count | `zz scale set` | `zcp` `zerops_scale`, GUI → **Automatic scaling configuration**, or REST |
+| Set or read env vars beyond `zcli project env` | `zz env set` / `zz env show` | `zcp` `zerops_env`, GUI, or REST `/user-data`, `/project-env` |
+| Read service events, deploy history | `zz process list`, `zz version list` | `zcp` `zerops_events`, GUI, or REST |
+| Health / HTTP readiness probe | — | `zcp` `zerops_verify` |
+| Export a project or service as YAML | `zz project export`, `zz service export` | `zcp` `zerops_export`, or GUI three-dot menu |
+| Roll back (activate an archived app version) | `zz version rollback` | GUI → *Pipelines & CI/CD settings*, or REST `/app-version` |
+| Read appVersion status, build/deploy state | `zz version list/get` | GUI, or REST `/app-version` |
+| Configure domains, ports, firewall rules | `zz route http/port` | GUI, or REST `/public-http-routing`, `/public-port-routing` |
+| Backups — create, list, tag, retention, download | `zz backup …` | GUI → **Backups List & Configuration**, or REST. `zsc backup-create <stackName>` creates one from inside a container, untagged |
+| L7 balancer configuration | `zz api PutProjectL7httpbalancerConfig` | GUI → **Advanced balancer configuration** |
+
+Every row is reachable from `zz`, because it wraps the REST API rather than a curated subset; the
+last row has no dedicated command but is one `zz api` call away. Restoring a backup is still
+GUI-only — the API exposes creation, tagging, retention and a download URL, but no restore
+endpoint.
 
 ### REST API
 
@@ -191,8 +230,75 @@ Token from GUI → Settings → **Access Token Management**. Non-obvious resourc
 `/app-version` (builds, deploys, rollback), `/project`, `/project-env`, `/public-http-routing`,
 `/public-port-routing`.
 
+**Verified against the live API** (some `api.mdx` names are stale): `GET /service-stack/{id}` and
+`GET /project/{id}` work and return full detail (service status, `activeAppVersion`,
+`primaryInstanceLocation`). The **search** endpoints take a POST body and **require `clientId`** in
+the conditions or they 400 with `clientId not defined` — this is the way to read appVersion status:
+
+```sh
+curl -sS -X POST "$BASE/app-version/search" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"search":[{"name":"clientId","operator":"eq","value":"<orgId>"},
+                 {"name":"serviceStackId","operator":"eq","value":"<serviceId>"}],
+       "sort":[{"name":"created","ascending":false}],"limit":6}'
+# -> items[].status (ACTIVE | DEPLOY_FAILED | BACKUP), items[].activationDate
+```
+
+`GET /app-version?serviceStackId=…`, `/user-data` and `/project-env` returned 404 as written — use
+the service-stack detail or the search POST above instead. The `orgId` (clientId) is on the project
+detail (`GET /project/{id}` → `clientId`).
+
 Scope CI tokens to the narrowest project that will work, and keep production tokens out of shared
 CI where a branch build can read them.
+
+## Roles and tokens
+
+Permissions resolve in two layers: a **project role override** if one exists, otherwise the
+**organization role**. Non-project operations (billing, team management) use the organization role
+only.
+
+| Role | Org access | Default project access | Create projects | Manage team |
+|---|---|---|---|---|
+| Owner | full, incl. billing | full | yes | all roles |
+| Admin | full, excl. billing | full | yes | Developer, Guest |
+| Developer | none | **none** — per-project only | yes (owns what they create) | no |
+| Guest | none | **none** — per-project only | no | no |
+
+Every organization must keep at least one Owner. Owners and Admins cannot be dropped below *Read
+only* on a project through the GUI (the API can set `NO_ACCESS`).
+
+Project access is **Full access** or **Read only**. Read-only blocks more than writes: no SSH web
+terminal, no file browser, no backup or code download, no VPN key creation, and sensitive
+environment variables come back as `REDACTED`.
+
+### Integration tokens
+
+Created at GUI → Settings → **Access Token Management**. Three shapes:
+
+| Shape | Reach |
+|---|---|
+| Full access to all projects | every current and future project |
+| Read access to all projects | view-only everywhere |
+| **Custom access per project** | nothing by default; each project added explicitly as Full or Read only |
+
+- **The value is shown once.** Regenerate creates a new value and immediately kills the old one;
+  settings are preserved.
+- **A token can never exceed its creator's permissions.** Developers and Guests can only mint
+  *Custom access per project* tokens.
+- A user cannot be demoted while holding tokens with higher permissions — modify or delete those
+  first.
+- Admins can manage tokens created by Developers and Guests, but not those of other Admins or Owners.
+
+Prefer *Custom access per project* for anything automated. It is also the **only** shape `zcp`
+accepts — it refuses account-wide and multi-project tokens at startup
+([`zcp-mcp.md`](zcp-mcp.md#zcp_api_key)).
+
+Keep the names distinct: `ZEROPS_TOKEN` is the CI/`zcli` delivery token, `ZCP_API_KEY` is the
+single-project agent token. A production `ZEROPS_TOKEN` belongs in the release secret store and
+nowhere near a development agent.
+
+The API exposes two roles the dashboard does not (`BASIC_USER`, `READ_ONLY`) plus per-user flags
+`canViewFinances`, `canEditFinances`, `canCreateProjects`.
 
 ## `zsc` commands
 

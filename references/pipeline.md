@@ -165,6 +165,33 @@ Environment variables are restored to their state when that version was last act
 
 ## CI/CD
 
+Three levels, in increasing order of control: the native repository connection, a CI job calling
+`zcli`, or your own orchestration over the REST API.
+
+### Native repository connection
+
+The zero-config path. GUI → service → **Build, Deploy, Run Pipeline Settings** →
+**Connect with a GitHub repository** (or GitLab), authorize, pick the repo, pick the trigger:
+
+| Trigger | Behavior |
+|---|---|
+| **New tag** | builds on every new tag; optional regex filter. **Recommended for production.** |
+| **Push to branch** | builds on every push to the named branch |
+
+The repo needs a valid `zerops.yaml` in its root before this works. Zerops takes full repository
+access in order to manage the webhook and pull code, and does not store your source beyond that.
+Disconnect with **Stop automatic build trigger**, which removes the webhook and the integration
+config.
+
+`[ci skip]` / `[skip ci]` in a commit message (with brackets, case-insensitive) suppresses the
+build. The webhook still fires and shows as delivered in GitHub — it just does nothing.
+
+Organization repositories may need Zerops granted access separately in the GitHub application
+settings.
+
+**This connection is per service.** A monorepo deploying several services needs one connection per
+service, and each builds the whole repo with its own `setup:`.
+
 ### GitHub Actions
 
 ```yaml
@@ -207,7 +234,20 @@ zcli push --project-id <id> --service-id <id> [--setup <name>] [--version-name "
 ```
 
 Set `ZEROPS_CLI_TERMINAL_MODE=disabled` in CI. Tokens come from GUI → Settings → Access Token
-Management; the service ID from the service URL or its three-dot menu.
+Management; the service ID from the service URL or its three-dot menu. Scope them per project — see
+[`cli.md`](cli.md#roles-and-tokens).
+
+### Preview and per-branch environments
+
+Zerops has no managed preview-environment feature. The documented pattern is to drive **whole
+projects** through the REST API from CI: check whether a project exists for the branch or PR, create
+it from an import template if not, then deploy into it. Ephemeral projects are torn down with the
+branch or PR; permanent stage and production projects only ever get new application code, so their
+databases, caches and storage survive every deploy.
+
+`zeropsio/zerops-showcase-deploy` is the reference implementation (GitHub Actions + the REST API, no
+`zcli`). It is a repo to fork, not a Zerops-managed service — the Actions minutes and the API calls
+are yours.
 
 ## Debugging a failed pipeline
 
@@ -229,7 +269,7 @@ Common causes:
 | App starts but 502 | Bound to `127.0.0.1` instead of `0.0.0.0`, or a port mismatch with `run.ports`. Full checklist in [`networking.md`](networking.md#502-diagnostic-checklist) |
 | `Cannot find module` / missing class at runtime | Dependencies not in `build.deployFiles`, or excluded by `.deployignore` |
 | Static site 404s on every route | `deployFiles: ./dist` instead of `dist/~` |
-| Deploy never activates, service still `ACTIVE` on old version | `run.initCommands` exited non-zero — check `appVersion.status` = `DEPLOY_FAILED` and a null `activationDate`, not the service status |
+| Deploy never activates, service still `ACTIVE` on old version | `run.initCommands` exited non-zero — **verified live**: the newest appVersion goes `DEPLOY_FAILED` with `activationDate: null` while the *service* and its active (previous) appVersion both still read `ACTIVE`. Diagnose via appVersion, not service status. Also **verified**: a failed init deploy does **not** stream the `initCommands` stdout to the runtime log — only the echoed script — so reproduce the command in a start step or debug mode to see why it failed |
 | Cache seems ignored | A repository file shadows the cached path (no-clobber), or a `prepareCommands` change invalidated both layers |
 | Env var arrives as literal `${db_x}` | Wrong hostname or variable name in the reference; see `env-variables.md` |
 
