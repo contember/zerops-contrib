@@ -34,6 +34,13 @@ and replaced on every deploy.
 Managed services (databases, caches, search, queues, storage) are provisioned, not built.
 Runtime services (nodejs, php, go, …) are built from your repo by the pipeline.
 
+**Import is create-only.** Re-importing a file updates nothing, and `override: true` *replaces* a
+runtime service and forces a redeploy — so a committed import YAML is a bootstrap script, not a
+declaration of state, and it drifts from the first GUI change onwards. Where you want it to behave
+like infrastructure-as-code, use `zz apply -f <import.yaml>`: it creates what is missing, converges
+the fields the API can change in place, and reports the rest instead of pretending. See
+`references/zz-cli.md`.
+
 ## Minimal working example
 
 `zerops-import.yaml` — provision once:
@@ -175,3 +182,10 @@ Build has a hard **60-minute** limit. `stack.build` reaching `FINISHED` means th
 the deploy is done when the new appVersion is `ACTIVE`. **Neither proves the app does what was
 asked** — a green build means Zerops accepted it, reachability means the process is up. Check the
 actual behavior.
+
+That is not a platitude. Verified live: a `zerops.yaml` whose `start` was `sleep 3600` validated,
+built, deployed and reported `ACTIVE` exactly like the real one — the only symptom was a 502. And a
+deployment can serve `/healthz` 200, serve its admin page, and still refuse every browser sign-in,
+because TLS terminates at the balancer and the app compares the `Origin` header against its own
+internal `http` scheme. **Exercise the behaviour you care about**, including one authenticated
+request, before calling a deploy done.

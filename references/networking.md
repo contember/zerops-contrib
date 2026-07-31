@@ -111,9 +111,18 @@ zcli project env --service app | grep -i subdomain
 or take the link from the service detail page in the GUI. To verify an app is up without depending
 on any of this, curl it internally: `curl http://app:3000/health` from a sibling or over the VPN.
 
-`enableSubdomainAccess: true` in the import YAML does not necessarily flip the toggle on immediately
-for a not-yet-deployed service — if the subdomain does not appear, enable it explicitly with
-`zcli service enable-subdomain <service>` (or the GUI toggle) once the service has deployed.
+**`enableSubdomainAccess: true` in the import YAML does not take effect on a service that has never
+been deployed — verified live.** After the import the service reads `subdomainAccess: false`, and
+enabling it explicitly fails too:
+
+```
+error: Service stack is not http or https
+```
+
+The subdomain needs a *deployed* HTTP port, so this is a field an import file cannot establish on
+its own. Deploy first, then `zz service enable-subdomain <service>` / `zcli service enable-subdomain`
+/ the GUI toggle — or re-run `zz apply`, which reports it as pending drift and converges it on the
+next pass.
 
 Limitations: shared HTTPS balancer across all Zerops projects (scalability bottleneck), hard
 **50 MB** upload cap, not configurable. Development and testing only.

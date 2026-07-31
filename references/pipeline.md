@@ -266,12 +266,40 @@ Common causes:
 | Symptom | Cause |
 |---|---|
 | Build fails immediately, no log, `buildFromGit` used | Private repository, or a `.git` suffix on the URL |
+| Build fails ~1 min in, log ends at "downloading your application, source, and unpacking it" | **The uploaded archive could not be unpacked.** Most likely it carries no directory entries — the platform's unpacker does not create parents. See [Silent unpack failures](#silent-unpack-failures) |
 | App starts but 502 | Bound to `127.0.0.1` instead of `0.0.0.0`, or a port mismatch with `run.ports`. Full checklist in [`networking.md`](networking.md#502-diagnostic-checklist) |
 | `Cannot find module` / missing class at runtime | Dependencies not in `build.deployFiles`, or excluded by `.deployignore` |
 | Static site 404s on every route | `deployFiles: ./dist` instead of `dist/~` |
 | Deploy never activates, service still `ACTIVE` on old version | `run.initCommands` exited non-zero — **verified live**: the newest appVersion goes `DEPLOY_FAILED` with `activationDate: null` while the *service* and its active (previous) appVersion both still read `ACTIVE`. Diagnose via appVersion, not service status. Also **verified**: a failed init deploy does **not** stream the `initCommands` stdout to the runtime log — only the echoed script — so reproduce the command in a start step or debug mode to see why it failed |
 | Cache seems ignored | A repository file shadows the cached path (no-clobber), or a `prepareCommands` change invalidated both layers |
 | Env var arrives as literal `${db_x}` | Wrong hostname or variable name in the reference; see `env-variables.md` |
+
+### Silent unpack failures
+
+**Verified live:** a build can fail with **zero diagnostic output**. The log ends at
+
+```
+Zerops is now downloading your application,
+source, and unpacking it on the container.
+```
+
+with no further line at any severity including `DEBUG`, the process record carrying
+`status: FAILED` and no message, and the appVersion only saying `BUILD_FAILED`. Nothing names a
+cause, so the pipeline has to be bisected:
+
+1. Replace `buildCommands` with `echo` and `deployFiles` with a single file. Still failing means the
+   cause is upstream of your commands.
+2. Push the identical tree with the *other* CLI (`zcli push` vs `zz push`). If one works, the
+   difference is the upload archive, not the repository or `zerops.yaml`.
+3. Compare the two archives: `tar -tvzf a.tar.gz | grep -c '^d'`.
+
+The known cause is **an archive with no directory entries**. The platform's unpacker does not create
+parents, so it dies on the first file whose directory is missing. GNU tar reads such an archive
+happily — it creates parents implicitly — so it looks valid locally. `zcli` writes them (520 for a
+2300-file repo); `zz` did not until this was found.
+
+Rule worth carrying: **a tar GNU tar accepts is not proof the receiver accepts it.** When you build
+an archive for this platform, assert the directory entries are there.
 
 ### Build out of memory
 

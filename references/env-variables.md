@@ -190,6 +190,22 @@ services:
       DB_PASSWORD=secure123
 ```
 
+## Reading variables back
+
+The endpoint behind `zz env list` / the API's `ListServiceStackUserData` covers **only variables
+stored on the service** — `envSecrets` and anything set in the GUI. Two verified surprises:
+
+- **Before the first deploy it answers `400 serviceStackNotFound`**, even though the service plainly
+  exists and the import just wrote secrets into it. The error names the wrong cause: the stack is
+  found, its variables simply are not readable yet. Treat it as "cannot check yet", not as a missing
+  service — a reconciler that fails here fails on every fresh environment.
+- **`run.envVariables` never appear there at all**, before or after a deploy. They are baked into the
+  app version rather than stored as service user-data, so the endpoint has nothing to return.
+
+`zz env show` is the one that answers "what does the process actually see" — the resolved
+environment, generated variables included. Reach for it when debugging; `env list` only ever tells
+you what is *set on the service*.
+
 ## Naming rules
 
 - **Key**: must match `[a-zA-Z_]+[a-zA-Z0-9_]*`. Case-sensitive, but must be unique within a scope

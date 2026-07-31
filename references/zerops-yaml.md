@@ -121,6 +121,19 @@ buildCommands:
     npm run build -- --tag "$TAG"
 ```
 
+**A `: ` inside an unquoted command makes YAML read the item as a mapping**, and validation then
+reports `cannot unmarshal !!map into string` — against a line number in the API's *reserialized*
+document, which does not match your file:
+
+```yaml
+buildCommands:
+  - echo "PROBE: starting"      # WRONG — parsed as a mapping
+  - 'echo "PROBE: starting"'    # right
+```
+
+The same applies to any command containing `: ` — `git commit -m "x: y"`, `sed 's/a: b/…/'`. Quote
+the whole scalar, or use a `|` block.
+
 ### `deployFiles`
 
 **This is the entire runtime filesystem, not a list of build artifacts.** The runtime container

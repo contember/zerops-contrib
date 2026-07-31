@@ -57,6 +57,7 @@ reflects reality. `--no-wait` returns the process id; `zz process wait <id>` joi
 
 ```sh
 zz status                                  # orient: project, services, health, domains
+zz apply -f zerops-import.yaml --dry-run   # what would change; then drop --dry-run
 zz push api                                # streams build logs, exits 8 if the build fails
 zz logs api --build                        # why the last build failed
 zz version rollback api --yes              # undo the last deploy
@@ -66,11 +67,45 @@ zz catalog --search postgres               # valid type/version strings, no gues
 zz validate -S api                         # check zerops.yaml before spending a build
 ```
 
+## `zz apply` — the closest thing to declarative infrastructure
+
+Import is create-only: re-importing updates nothing, and `override: true` *replaces* a runtime
+service and forces a redeploy. A versioned import file is therefore a bootstrap script, not a
+declaration of state, and it drifts from the first GUI change onwards.
+
+`zz apply -f <import.yaml>` reconciles the file against the live project:
+
+| | |
+|---|---|
+| **creates** | services in the file that do not exist — one import call, so the platform still expands `<@generateRandomString(…)>` |
+| **converges** | `minContainers`/`maxContainers`, `verticalAutoscaling`, `enableSubdomainAccess`, `objectStorageSize` |
+| **creates** | declared `envSecrets` keys that are missing |
+| **reports** | everything else: a changed `type`, services nobody declared |
+
+Deliberate limits, because the alternative is worse than drift:
+
+- **Nothing is ever deleted.** An undeclared service is as likely to be deliberate as leftovers.
+- **An existing secret is never overwritten**, so re-applying a file with generated secrets does not
+  rotate a session secret or a database password out from under a running app. Change one with
+  `zz env set … --restart`.
+- **A blocked action does not abandon the rest.** Some fields are only settable in a particular
+  order — a subdomain needs a deployed HTTP port — so failures are collected and reported, and the
+  command exits 8 with the rest applied. Re-run once the blocker clears.
+- `--dry-run` prints the same plan without sending a mutating request. Start there.
+
 ## Gotchas worth knowing
 
 - **`zz env set` does not restart the service.** Running containers keep the old value until
   recreated. Pass `--restart`, or follow with `zz service restart`. A *reload* is not enough —
   it does not re-read environment variables.
+- **`zz env list` fails with `serviceStackNotFound` before the first deploy**, and never shows
+  `run.envVariables` at all — those are baked into the app version, not stored on the service. Use
+  `zz env show` for what the process actually sees. See
+  [`env-variables.md`](env-variables.md#reading-variables-back).
+- **`zz push` reports that a deploy succeeded, not what it deployed.** A stale or wrong
+  `zerops.yaml` builds, deploys and reports `ACTIVE` exactly like the right one; the only symptom is
+  the app misbehaving. It now echoes the resolved `start` command for that reason — check it matches
+  what you expect before believing a green deploy.
 - **Log `--limit` is not a scan depth.** The platform filters within a window over the project's
   *combined* log stream, so `zz` separates `--limit` (lines you want) from `--scan` (how far back
   the server looks). If a quiet service in a busy project returns nothing, raise `--scan`.

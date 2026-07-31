@@ -47,6 +47,32 @@ function findZeropsYaml(ctx: Context, workingDir: string): string {
   );
 }
 
+/**
+ * What the chosen setup will actually run, for the confirmation line below.
+ *
+ * A stale or wrong `zerops.yaml` builds, deploys and reports ACTIVE exactly like
+ * the right one — the only symptom is the app misbehaving afterwards. Echoing
+ * the resolved start command turns "it deployed" and "it deployed what I meant"
+ * back into two distinguishable outcomes.
+ */
+function startCommandIn(yamlText: string, setup: string): string | null {
+  try {
+    const parsed = Bun.YAML.parse(yamlText) as {
+      zerops?: {
+        setup?: string;
+        run?: { start?: string; startCommands?: { command?: string }[] };
+      }[];
+    };
+    const found = (parsed?.zerops ?? []).find((s) => s.setup === setup);
+    if (found?.run?.start) return found.run.start;
+    const commands = found?.run?.startCommands ?? [];
+    const named = commands.map((c) => c.command).filter(Boolean);
+    return named.length > 0 ? named.join(" & ") : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Lists the `setup:` names so a mismatch can be reported locally with the valid options. */
 function setupsIn(yamlText: string): string[] {
   try {
@@ -263,6 +289,9 @@ One push deploys one setup. In a monorepo, run it once per service with --setup.
         });
         ctx.out.step(`${basename(yamlPath)} validated (setup: ${setup})`);
       }
+
+      const start = startCommandIn(yamlText, setup);
+      if (start !== null) ctx.out.info(`will run: ${start}`);
 
       if (ctx.dryRun) {
         return {

@@ -54,6 +54,16 @@ Default to **Alpine**. Switch to Ubuntu only for glibc needs: CGO-enabled Go, gl
 C-extension wheels, or **Deno** (no Alpine build exists). Needing a package is *not* a reason —
 both install packages (`sudo apk add` / `sudo apt-get install`).
 
+**A bare version string is expanded to an OS-qualified one, and build and run need not agree.**
+Verified live: `type: bun@1.3.9` produced a service reporting
+`serviceStackTypeVersionName: ubuntu/bun@1.3.9`, while the same string as `base:` resolved the build
+to `alpine/bun@1.3.9` (visible as the appVersion's `base`). Two consequences:
+
+- Anything comparing a declared `type` against the live one must treat a declaration with no OS
+  prefix as matching any prefix, or it reports drift on a service it just created from that file.
+- If your app cares which libc it runs on, name the OS explicitly on both sides rather than assuming
+  one bare string gives you one distribution.
+
 ## HA variants and profiles
 
 Container count for managed services is fixed by the **type variant**, set at creation and
