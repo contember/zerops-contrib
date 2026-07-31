@@ -9,6 +9,9 @@ environment variables.
 - [Choosing a service](#choosing-a-service)
 - [HA variants and profiles](#ha-variants-and-profiles)
 - [Generated environment variables](#generated-environment-variables)
+  - [PostgreSQL](#postgresql) · [MariaDB](#mariadb) · [Valkey](#valkey) · [KeyDB](#keydb-legacy)
+  - [Object storage](#object-storage) · [Search engines](#search-engines)
+  - [Administering a database](#administering-a-database) · [Platform variables](#platform-variables)
 - [Version tables](#version-tables)
 
 ## Two different version strings
@@ -38,7 +41,7 @@ the same underlying version.
 | Advanced / HA search | Elasticsearch | Multi-node, plugins, JVM tuning |
 | Autocomplete with HA | Typesense | 3-node Raft, CORS built in |
 | Vector / similarity | Qdrant | HTTP + gRPC, cluster replication, internal-only |
-| Files that outlive a deploy | Object storage (S3/MinIO) | Container disk is replaced on deploy |
+| Files that outlive a deploy | Object storage (S3/MinIO) | Container disk is replaced on deploy. Not covered by Zerops backups |
 | Shared POSIX filesystem | Shared storage | Mounted at `/mnt/<hostname>` across containers |
 | Static site | `static` | Build on `nodejs@latest`, run on `static` |
 | Reverse proxy / custom webserver | `nginx` | |
@@ -61,14 +64,22 @@ Container count for managed services is fixed by the **type variant**, set at cr
 | `:single` | 1 | Development, non-critical |
 | `:ha` | 3, on separate physical machines | Production, automatic failover |
 
-Switching requires delete + recreate. The legacy form `type: postgresql@18` + `mode: HA` still
-remaps to the variant but `mode` is deprecated and ignored by validation.
+Switching is a data migration, not an edit — see
+[`operations.md`](operations.md#moving-a-managed-database-to-ha).
 
-The generated version tables below come from the docs site's `data.json`, which still lists some
-managed services in their bare form (`mariadb@10.6`, `valkey@7.2`, `clickhouse@25.3`). The variant
-form is nevertheless the current, documented spelling for **PostgreSQL, MariaDB, ClickHouse,
-Valkey, shared storage and SeaweedFS** — write `mariadb:single@10.6`, `valkey:ha@7.2`,
-`clickhouse:single@25.3`. Object storage, search engines and message brokers have no variant.
+**Only some services have a variant.** Where one exists it is the current spelling and the legacy
+`type: X@ver` + `mode: HA` form is deprecated (still remapped, ignored by validation). Where none
+exists, `mode:` remains the documented and only way to get HA.
+
+| Service | HA mechanism |
+|---|---|
+| PostgreSQL, MariaDB, ClickHouse, Valkey, shared storage, SeaweedFS | `:single` / `:ha` type variant |
+| Elasticsearch, Typesense, Kafka | `mode: HA` — **not** deprecated here, no variant exists |
+| Meilisearch, Qdrant, object storage | single node only |
+
+The generated version tables below come from the docs site's `data.json`, which still lists the
+variant-capable services in their bare form (`mariadb@10.6`, `valkey@7.2`, `clickhouse@25.3`).
+Write the variant anyway: `mariadb:single@10.6`, `valkey:ha@7.2`, `clickhouse:single@25.3`.
 
 ### PostgreSQL `profile`
 
@@ -111,11 +122,16 @@ auto-injected. Examples below assume the service hostname `db` / `storage`.
 | `user` | `db` by default |
 | `password` | generated |
 | `dbName` | `db` by default |
-| `connectionString` | `postgresql://${user}:${password}@${hostname}:5432` — **no database path** |
+| `superUser` / `superUserPassword` | the `postgres` superuser — needed for `CREATE EXTENSION` (`pg_stat_statements`, `vector`, `postgis`) |
+| `connectionString` | `postgresql://${user}:${password}@${hostname}:5432` — see the note below |
 | `connectionTlsString` | same, via `6432` |
 | `connectionStringReplicas` | `…@${hostname}:5433` (HA only) |
 
-- Append `/${dbName}` yourself if your driver needs a database in the URL.
+- **Whether `connectionString` already ends in `/${dbName}` is contested upstream** — the PostgreSQL
+  reference page shows it with the database path, the newer guide without. Appending blindly gives
+  you `…/db/db`. Read the real value before deciding:
+  `zcli project env --service db | grep connectionString`. From a sibling service the database name
+  is `${db_dbName}`, never a bare `${dbName}` (which would not resolve).
 - `5432`/`5433` do not support TLS — connect with `sslmode=disable`. Requesting TLS fails the
   handshake. Security comes from the private network / VPN tunnel.
 - `6432` **requires** TLS (`sslmode=require` is enough; `verify-full` needs the Zerops CA). Prefer
@@ -196,6 +212,44 @@ run:
 | Qdrant | `apiKey` (full), `readOnlyApiKey` (search only) |
 | Elasticsearch | `PLUGINS` (comma-separated) and `HEAP_PERCENT` (default 50) — set in `envSecrets` |
 
+### Administering a database
+
+Databases are **not SSH-able**. Reach them over the VPN with an ordinary client:
+
+```sh
+zcli vpn up <project-id>
+PGPASSWORD=<password> psql -h db -U db -d db      # try db.zerops if the name does not resolve
+mysql -h db -u db -p                              # MariaDB
+redis-cli -h cache -p 6379 -a "$cache_password"   # Valkey
+```
+
+Environment variables are not available over the VPN — copy connection details from the service
+detail page (**Peek access details**).
+
+Desktop clients (pgAdmin, DBeaver, DataGrip, TablePlus) work the same way. Connect **without**
+TLS on `5432`/`5433`; the tunnel already encrypts.
+
+For a browser-based tool, deploy the Adminer recipe into the project and reach it over the VPN at
+`http://adminer` (never `https`):
+
+```yaml
+services:
+  - hostname: adminer
+    type: php-apache@8.5
+    maxContainers: 1
+    buildFromGit: https://github.com/zeropsio/recipe-adminer
+```
+
+Leave `enableSubdomainAccess` off and remove it before production.
+
+Export and import:
+
+```sh
+pg_dump db > dump.sql          &&  psql -d db < dump.sql
+pg_dump -Fc db > dump.dump     &&  pg_restore -d db dump.dump
+mysqldump -h db -u db -p db > dump.sql
+```
+
 ### Platform variables
 
 `hostname` and `PATH` exist on every service. `PATH` is hard-reserved — setting it returns
@@ -220,7 +274,7 @@ Values for `build.base` and `run.base`.
 
 | Service type | Versions (newest first, aliases share a row) |
 |---|---|
-| Bun | `bun@1.3.9` / `bun@1.3` / `bun@latest`<br>`bun@1.2.2` / `bun@1.2`<br>`bun@nightly`<br>`bun@canary`<br>`bun@1.1.34` / `bun@1.1(Ubuntu only)` |
+| Bun | `bun@1.3.9` / `bun@1.3` / `bun@latest`<br>`bun@1.2.2` / `bun@1.2`<br>`bun@nightly`<br>`bun@canary`<br>`bun@1.1.34` / `bun@1.1 (Ubuntu only)` |
 | Deno | `deno@2.0.0` / `deno@2` / `deno@latest`<br>`deno@1.45.5` / `deno@1` |
 | .NET | `dotnet@10` / `dotnet@latest`<br>`dotnet@9`<br>`dotnet@8`<br>`dotnet@7`<br>`dotnet@6` |
 | Elixir | `elixir@1.16` / `elixir@1` / `elixir@latest` |
@@ -253,7 +307,7 @@ Managed services take a `:single` / `:ha` deployment variant where listed. The l
 
 | Service type | Versions (newest first, aliases share a row) |
 |---|---|
-| Bun | `bun@1.3.9` / `bun@1.3` / `bun@latest`<br>`bun@1.2.2` / `bun@1.2`<br>`bun@nightly`<br>`bun@canary`<br>`bun@1.1.34` / `bun@1.1(Ubuntu only)` |
+| Bun | `bun@1.3.9` / `bun@1.3` / `bun@latest`<br>`bun@1.2.2` / `bun@1.2`<br>`bun@nightly`<br>`bun@canary`<br>`bun@1.1.34` / `bun@1.1 (Ubuntu only)` |
 | Deno | `deno@2.0.0` / `deno@2` / `deno@latest`<br>`deno@1.45.5` / `deno@1` |
 | .NET | `dotnet@10`<br>`dotnet@9`<br>`dotnet@8`<br>`dotnet@7`<br>`dotnet@6` |
 | Elixir | `elixir@1` / `elixir@1.16` / `elixir@1.16.2` |

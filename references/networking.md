@@ -14,7 +14,7 @@
 - [L7 balancer](#l7-balancer)
 - [Cloudflare](#cloudflare)
 - [VPN](#vpn)
-- [SSH](#ssh)
+- [Getting a shell](#getting-a-shell)
 
 ## Architecture
 
@@ -30,18 +30,26 @@ immediately.
 
 ## Internal access
 
-Address any sibling by **hostname and internal port**:
+Address any sibling by **hostname and internal port**. The hostname is the service name; both
+`api` and `api.zerops` resolve.
 
-```
-http://api:3000/health
-http://db:5432
+```sh
+curl http://api:3000/health     # HTTP service
+psql -h db -p 5432 ...          # Postgres — not HTTP, just host:port
+redis-cli -h cache -p 6379 ...  # Valkey
 ```
 
 Rules:
 
-- **Always `http://`, never `https://`.** SSL terminates at the balancer; the private network is
-  already isolated. `https://api:3000` fails.
-- Ports must be declared in `run.ports` in the target's `zerops.yaml`.
+- **For HTTP between services use `http://`, never `https://`.** SSL terminates at the L7 balancer
+  and the private network is already isolated, so `https://api:3000` fails.
+- **Non-HTTP protocols are not affected by that rule** — they connect to `hostname:port` and follow
+  their own TLS conventions. Some managed services expose both a plaintext and a TLS port, and a
+  few *require* TLS: PostgreSQL `5432`/`5433` are plaintext-only while pgBouncer on `6432` requires
+  it; Valkey serves `6379` plaintext and `6380` TLS. Per-service details in
+  [`service-catalog.md`](service-catalog.md#generated-environment-variables).
+- HTTP ports must be declared in `run.ports` in the target's `zerops.yaml`. Webserver runtimes
+  (`php-*`, `nginx`, `static`) declare none — their port is implicit.
 - Service discovery is automatic — no configuration.
 - **Cross-project private networking is impossible.** Bridge projects via public access.
 - Environment variables are not shared automatically — see
@@ -76,14 +84,27 @@ service or over the VPN.
 Enable with `enableSubdomainAccess: true` in the import YAML, or the **Zerops subdomain access**
 toggle under *Subdomain & domain & IP access*, or `zcli service enable-subdomain`.
 
-URL shape: `{hostname}-{subdomainHostPrefix}[-{port}].{rest}`.
-With hostname `appdev`, `zeropsSubdomainHost` `1df2.prg1.zerops.app` and port 3000:
+URL shape: `{hostname}-{prefix}[-{port}].{rest}`. With hostname `appdev`, prefix `1df2`, region
+segment `prg1.zerops.app` and port 3000:
 
 ```
 https://appdev-1df2-3000.prg1.zerops.app
 ```
 
-Port 80 omits the port suffix. **Every HTTP port gets its own subdomain.**
+Port 80 omits the port suffix. **Every HTTP port gets its own subdomain**, and the subdomain route
+only materialises once a deploy has declared that HTTP port.
+
+**Do not compose this URL from memory.** Upstream is inconsistent about whether the
+`zeropsSubdomainHost` variable holds the bare prefix (`1df2`) or the whole host
+(`1df2.prg1.zerops.app`), and the two readings produce different — one of them broken — URLs. Read
+the actual value instead of assuming:
+
+```sh
+zcli project env --service app | grep -i subdomain
+```
+
+or take the link from the service detail page in the GUI. To verify an app is up without depending
+on any of this, curl it internally: `curl http://app:3000/health` from a sibling or over the VPN.
 
 Limitations: shared HTTPS balancer across all Zerops projects (scalability bottleneck), hard
 **50 MB** upload cap, not configurable. Development and testing only.
@@ -103,6 +124,31 @@ container. The balancer runs 2 containers, scales vertically, and cannot be modi
 
 Upload limit on a custom domain is 512 MB by default, configurable up to 2048 MB.
 
+### DNS records
+
+Two ways to point a domain at the project:
+
+- **A + AAAA** — the direct form, values from the project's IP addresses. A shared IPv4 requires
+  **both** records: Zerops reverse-looks-up the AAAA record to verify ownership for SNI routing, and
+  without it routing fails silently.
+- **CNAME** — for subdomains, or at the apex with a provider that supports CNAME flattening. Take
+  the target from GUI → service → **Public access & internal ports** → the **CNAME** option; Zerops
+  creates A/AAAA records behind it. **With any CDN or proxy in front, toggle off "Shared IPv4
+  included in the CNAME"** or routing breaks.
+
+Certificates: a plain domain validates over HTTP-01, so it must already route to the service before
+the certificate can issue. Wildcards need DNS-01 — `CNAME _acme-challenge.<domain>` →
+`<domain>.zerops.zone`.
+
+Verify after propagation (5–10 minutes):
+
+```sh
+dig AAAA <domain>
+curl -vI https://<domain>
+curl -4 -v https://<domain>    # test each stack separately
+curl -6 -v https://<domain>
+```
+
 ## IP addresses
 
 | Type | Cost | Notes |
@@ -115,7 +161,8 @@ Upload limit on a custom domain is 512 MB by default, configurable up to 2048 MB
 
 Available for **runtime services and PostgreSQL** only.
 
-- Any port **10–65435**; 80 and 443 are reserved.
+- Any port **10–65435** for the *public* port; 80 and 443 are reserved for public direct access
+  (internally, `run.ports` may use 80).
 - TCP and UDP.
 - Each public port maps to any internal port; several public ports may share one internal port.
 - IPv4 and IPv6 configured independently.
@@ -127,12 +174,33 @@ PostgreSQL public access always routes through pgBouncer on `6432` over TLS. The
 
 ## Firewall
 
-Per public port, optional:
+### Inbound, per public port
 
 - **Blacklist** — block listed IPs/CIDRs, allow everything else.
 - **Whitelist** — allow only listed IPs/CIDRs.
 
 Rules accept a single IP or a CIDR range.
+
+### Outbound, platform-wide
+
+Zerops runs nftables with **TCP ports 1–1024 restricted — only 22, 53, 80, 123, 443 and 587 are
+allowed outbound.** UDP and TCP 1025–65535 are unrestricted. Changing this requires emailing
+`support@zerops.io` with the Project ID and Organization ID.
+
+The consequence that bites most often is **email**: port **587 (STARTTLS) is the only usable SMTP
+port**; 25 and 465 are permanently blocked. A perfectly ordinary `SMTP_PORT: "465"` silently never
+connects.
+
+| Provider | Host | Port |
+|---|---|---|
+| SendGrid | `smtp.sendgrid.net` | 587 (username `apikey`) |
+| Mailgun | `smtp.mailgun.org` | 587 |
+| Amazon SES | `email-smtp.{region}.amazonaws.com` | 587 |
+| Gmail | `smtp.gmail.com` | 587 (app password) |
+| Office 365 | `smtp.office365.com` | 587 |
+
+Non-secret SMTP settings go in `run.envVariables` (`zerops.yaml`); the password goes in
+`envSecrets` (import YAML). Different files — a bare top-level `envVariables:` block is invalid.
 
 ## L7 balancer
 
@@ -181,19 +249,66 @@ zcli vpn down
 - **One project at a time** — connecting elsewhere disconnects the current one.
 - Use plain `http://` and no database TLS on `5432`/`5433`; the tunnel already encrypts.
 - **Environment variables are not available over the VPN.** Copy access details from the GUI.
-- Set a default project with `ZEROPS_PROJECTID` or `.zcli.yml` to skip the argument.
+- Set a default project with `ZEROPS_PROJECTID` or `./.zcli.yaml` to skip the argument.
+- **`dig`/`nslookup`/`host` bypass the system resolver** and report false NXDOMAIN over the VPN.
+  Test reachability with `nc -zv db 5432 -w 3` instead.
 
-## SSH
+## Getting a shell
+
+**SSH works only for runtime services and web servers.** Databases, message brokers and object
+storage are not SSH-able — reach those with their own client over the VPN.
+
+### Web terminal — the zero-setup path
+
+Every service detail page has a **Remote Web Terminal**: no VPN, instant, and **never blocked by
+SSH isolation rules**. It is the emergency access route and the right first answer to "get me a
+shell". The GUI also has a **file browser** with a container selector for inspecting the deployed
+filesystem.
+
+### SSH over the VPN
 
 ```sh
-ssh <service-hostname>
+zcli vpn up <project-id>
+ssh app                          # random container in HA
+ssh node-id-1.runtime.app.zerops # a specific container
 ```
 
-Reachable once you are on the private network (VPN, or from another container). Useful for
-debugging and inspection.
+Container hostnames follow `node-id-<n>.runtime.<service>.zerops` or
+`node<n>.runtime.<service>.zerops`. Numbers are **not sequential** — decommissioned names are never
+recycled, so you may see `node-id-5` and `node-id-12` side by side, and they change as the service
+scales. Never connect by IP; container IPs are dynamic.
 
-**Changes made over SSH are not persistent** — the container is replaced on the next deploy or
-scale event. Once a setup step works, move it into `run.prepareCommands` (system packages) or
-`run.initCommands` (per-start work) so it survives.
+In HA, plain `ssh <service>` lands on a **random** container. To inspect the one that is
+misbehaving, use its container hostname.
 
-SSH isolation defaults to `vpn` (`--ssh-isolation` on `zcli project create` / `service create`).
+### Persistence
+
+**Changes made over SSH are not persistent** — in HA they affect only that one container, and any
+container replacement (deploy, scale, failover) restores the deployed version. Once a setup step
+works, move it into `run.prepareCommands` (system packages) or `run.initCommands` (per-start work).
+
+### `sshIsolation`
+
+A project variable, overridable per service, default `vpn`. Set it in the import YAML
+(`project.sshIsolation` / `services[].sshIsolation`), in the GUI, or with `--ssh-isolation` on
+`zcli project create` / `service create`.
+
+Allow rules: `vpn` (VPN SSH), `project` (any service in the project), `service` (containers of the
+same service), `service@name` (one named service). Prefix with `-` to block. Combine with spaces:
+`sshIsolation: "vpn project"`.
+
+Evaluation order, most specific first: `service@name` → `service` → `project` → `vpn`. Block rules
+win over allow rules at the same specificity, and a broad block can make a later allow unreachable
+— `project -service` blocks all service-to-service SSH despite the `project` rule.
+
+| Goal | Value |
+|---|---|
+| Production default | `vpn` |
+| Development / microservice debugging | `vpn project` |
+| Only one service may SSH out | `vpn service@gateway` |
+| Everyone except one service | `project -service@untrusted` |
+
+Web terminal access bypasses all of these, always.
+
+If an SSH connection is refused, check `sshIsolation` before assuming a network fault — and use the
+web terminal in the meantime.

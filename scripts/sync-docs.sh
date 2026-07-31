@@ -2,21 +2,31 @@
 # Sync this skill against upstream https://github.com/zeropsio/docs
 #
 #   sync-docs.sh            regenerate version tables + report upstream changes
-#   sync-docs.sh --check    report only, write nothing
+#   sync-docs.sh --check    report only, change no skill file; exits 1 on drift
 #
 # Version tables are machine-written from the upstream static/data.json into the
 # GENERATED block of references/service-catalog.md. Prose is not touched — the
 # script only tells you which upstream pages moved so you can review them.
+#
+# Both modes clone/fetch the upstream repo into a cache outside the skill
+# (~/.cache/zerops-skill/docs, override with ZEROPS_DOCS_CACHE).
+#
+# Fails loudly rather than producing a quietly-wrong table: a renamed data.json
+# key, a service upstream added that this generator does not render, or a tracked
+# page that no longer exists are all reported.
 
 set -euo pipefail
 
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CACHE_DIR="${ZEROPS_DOCS_CACHE:-$SKILL_DIR/.cache/zerops-docs}"
+# Outside the skill on purpose: the upstream clone is ~120 MB and would otherwise
+# pollute greps of the skill and get zipped into any packaged artifact.
+CACHE_DIR="${ZEROPS_DOCS_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/zerops-skill/docs}"
 STATE_FILE="$SKILL_DIR/.docs-sync.json"
 CATALOG="$SKILL_DIR/references/service-catalog.md"
 REPO="https://github.com/zeropsio/docs.git"
 
 CHECK_ONLY=0
+DRIFT=0
 [[ "${1:-}" == "--check" ]] && CHECK_ONLY=1
 
 for bin in git python3; do
@@ -58,7 +68,25 @@ UPSTREAM_SOURCES=(
   "apps/docs/content/guides/choose-search.mdx|references/service-catalog.md"
   "apps/docs/content/guides/choose-runtime-base.mdx|references/service-catalog.md"
   "apps/docs/content/postgresql/how-to/connect.mdx|references/service-catalog.md"
+  "apps/docs/content/postgresql/how-to/manage.mdx|references/service-catalog.md"
+  "apps/docs/content/postgresql/how-to/scale.mdx|references/operations.md"
   "apps/docs/content/valkey/overview.mdx|references/service-catalog.md"
+  "apps/docs/content/features/backup.mdx|references/operations.md"
+  "apps/docs/content/guides/backup.mdx|references/operations.md"
+  "apps/docs/content/features/debug-mode.mdx|references/pipeline.md"
+  "apps/docs/content/references/metrics.mdx|references/operations.md"
+  "apps/docs/content/references/api.mdx|references/cli.md"
+  "apps/docs/content/references/networking/ssh.mdx|references/networking.md"
+  "apps/docs/content/references/networking/vpn.mdx|references/networking.md"
+  "apps/docs/content/references/networking/dns.mdx|references/networking.md"
+  "apps/docs/content/references/networking/l7-balancer-config.mdx|references/networking.md"
+  "apps/docs/content/guides/firewall.mdx|references/networking.md"
+  "apps/docs/content/guides/smtp.mdx|references/networking.md"
+  "apps/docs/content/guides/public-access.mdx|references/networking.md"
+  "apps/docs/content/guides/shared-storage-integration.mdx|references/operations.md"
+  "apps/docs/content/static/overview.mdx|references/zerops-yaml.md"
+  "apps/docs/content/php/how-to/build-pipeline.mdx|references/zerops-yaml.md"
+  "apps/docs/content/nodejs/how-to/build-pipeline.mdx|references/zerops-yaml.md"
 )
 
 # ---------------------------------------------------------------- fetch upstream
@@ -100,15 +128,20 @@ out = []
 
 def joined(rows):
     """rows: list of alias-lists -> one markdown cell per row, aliases comma-joined."""
-    return ["`" + "` / `".join(r) + "`" for r in rows]
+    # Upstream writes some entries as "bun@1.1(Ubuntu only)"; give the note room to breathe.
+    fix = lambda s: s.replace("(", " (") if "(" in s and " (" not in s else s
+    return ["`" + "` / `".join(fix(a) for a in r) + "`" for r in rows]
+
+missing = []
 
 def table(title, entries, header="Service type"):
-    """entries: list of (name, rows-or-None)."""
+    """entries: list of (name, rows-or-None). A None row means upstream data moved."""
     out.append(f"### {title}\n")
     out.append(f"| {header} | Versions (newest first, aliases share a row) |")
     out.append("|---|---|")
     for name, rows in entries:
         if not rows:
+            missing.append(f"{title} / {name}")
             continue
         cell = "<br>".join(joined(rows))
         out.append(f"| {name} | {cell} |")
@@ -201,6 +234,29 @@ table("Storage", [
     ("SeaweedFS", imp("seaweedfs")),
 ], header="Storage")
 
+if missing:
+    sys.exit(
+        "error: no version data in data.json for: "
+        + ", ".join(missing)
+        + "\n       upstream renamed or removed these keys; fix the generator."
+    )
+
+# Surface services upstream added that this generator does not render.
+KNOWN = {
+    "alpine", "ubuntu", "go", "php", "dotnet", "nodejs", "python", "ruby", "rust",
+    "bun", "deno", "elixir", "gleam", "java", "nginx", "static", "docker",
+    "mariadb", "postgresql", "keydb", "valkey", "qdrant", "nats", "kafka",
+    "elasticsearch", "meilisearch", "typesense", "rabbitmq", "clickhouse",
+    "seaweedfs", "sharedstorage", "objectstorage",
+}
+unmapped = sorted(set(data) - KNOWN)
+if unmapped:
+    sys.exit(
+        "error: data.json has services this generator does not render: "
+        + ", ".join(unmapped)
+        + "\n       add them to a table in scripts/sync-docs.sh."
+    )
+
 print("\n".join(out).rstrip())
 PY
 
@@ -236,7 +292,23 @@ open(path, "w", encoding="utf-8").write(new)
 print("==> wrote version tables to %s" % path)
 PY
 else
-  echo "==> --check: version tables not written"
+  # Check mode must still answer "would the tables change?".
+  if python3 - "$CATALOG" "$TMP_BLOCK" <<'PY'
+import re, sys
+body = open(sys.argv[1], encoding="utf-8").read()
+fresh = open(sys.argv[2], encoding="utf-8").read().strip()
+m = re.search(
+    r"<!-- BEGIN GENERATED: versions -->\n(?:<!--.*?-->\n)?(.*?)<!-- END GENERATED: versions -->",
+    body, re.S,
+)
+sys.exit(0 if m and m.group(1).strip() == fresh else 1)
+PY
+  then
+    echo "==> --check: version tables are up to date"
+  else
+    echo "==> --check: VERSION TABLES ARE STALE — rerun without --check to regenerate"
+    DRIFT=1
+  fi
 fi
 
 # ------------------------------------------------------------ report doc changes
@@ -272,6 +344,17 @@ else
   fi
 fi
 
+# A renamed upstream page would otherwise silently never match again.
+STALE=0
+for entry in "${UPSTREAM_SOURCES[@]}"; do
+  src="${entry%%|*}"
+  if [[ ! -f "$CACHE_DIR/$src" ]]; then
+    echo "    warning: tracked page no longer exists upstream: $src"
+    STALE=1
+  fi
+done
+[[ "$STALE" -eq 1 ]] && echo "    -> update UPSTREAM_SOURCES in scripts/sync-docs.sh"
+
 # ----------------------------------------------------------------- record state
 
 if [[ "$CHECK_ONLY" -eq 0 ]]; then
@@ -286,3 +369,6 @@ open(sys.argv[1], "a").write("\n")
 PY
   echo "==> recorded $NEW_COMMIT in $STATE_FILE"
 fi
+
+[[ "$DRIFT" -eq 1 ]] && exit 1
+exit 0

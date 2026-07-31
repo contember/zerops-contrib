@@ -135,14 +135,9 @@ are separate concerns.
 
 ## Readiness and health checks
 
-Full parameter reference in [`zerops-yaml.md`](zerops-yaml.md#health-and-readiness-checks).
-
-- **`deploy.readinessCheck`** gates traffic during a deploy. Sequence: `start` runs → check runs →
-  on failure wait `retryPeriod` and retry → on success the container goes active. After
-  `failureTimeout` the container is deleted and the deploy fails; the previous version keeps
-  serving. Overall retry window is 5 minutes.
-- **`run.healthCheck`** monitors the live app. Failures → `disconnectTimeout` removes the container
-  from the balancer → `failureTimeout` restarts it → `recoveryTimeout` gates its return.
+`deploy.readinessCheck` gates traffic during a deploy; `run.healthCheck` monitors the live app
+continuously. Parameters, timeout semantics and failure behavior:
+[`zerops-yaml.md`](zerops-yaml.md#health-and-readiness-checks).
 
 Without a health check the balancer cannot route around a degraded container.
 
@@ -217,17 +212,35 @@ Management; the service ID from the service URL or its three-dot menu.
 ## Debugging a failed pipeline
 
 1. **Build log** — `zcli service log -S <id> --show-build-logs`, or the pipeline detail in the GUI.
-2. **Runtime log** — `zcli service log -S <id> --follow`.
+2. **Runtime log** — `zcli service log -S <id> --follow`. On `php-*` and `nginx` services also
+   `--message-type WEBSERVER`, where the 502 evidence actually lives.
 3. **Runtime-prepare log** — in the pipeline detail, when a custom runtime image is used.
-4. Add `zsc noop` as a build command to keep the container alive for inspection.
+4. **Debug mode** — the supported way to inspect a failing build. GUI → service → *Pipelines &
+   CI/CD settings* → set the build phase to **On command fail**, re-run, then connect to the paused
+   container and look around; drive it with `zsc debug continue|success|fail`. Remember the paused
+   time counts against the 60-minute limit, and disable it afterwards. See
+   [`cli.md`](cli.md#zsc-debug-continuesuccessfail).
 
 Common causes:
 
 | Symptom | Cause |
 |---|---|
 | Build fails immediately, no log, `buildFromGit` used | Private repository, or a `.git` suffix on the URL |
-| App starts but 502 | Bound to `127.0.0.1` instead of `0.0.0.0`, or a port mismatch with `run.ports` |
-| Files missing at runtime | Not listed in `build.deployFiles`, or excluded by `.deployignore` |
+| App starts but 502 | Bound to `127.0.0.1` instead of `0.0.0.0`, or a port mismatch with `run.ports`. Full checklist in [`networking.md`](networking.md#502-diagnostic-checklist) |
+| `Cannot find module` / missing class at runtime | Dependencies not in `build.deployFiles`, or excluded by `.deployignore` |
+| Static site 404s on every route | `deployFiles: ./dist` instead of `dist/~` |
 | Deploy never activates, service still `ACTIVE` on old version | `run.initCommands` exited non-zero — check `appVersion.status` = `DEPLOY_FAILED` and a null `activationDate`, not the service status |
 | Cache seems ignored | A repository file shadows the cached path (no-clobber), or a `prepareCommands` change invalidated both layers |
 | Env var arrives as literal `${db_x}` | Wrong hostname or variable name in the reference; see `env-variables.md` |
+
+### Build out of memory
+
+Build RAM is **8 GB fixed** — min equals max, so there is nothing to scale. Options, in order:
+
+1. Raise the runtime's own heap rather than the container: `NODE_OPTIONS: "--max-old-space-size=7168"`
+   in `build.envVariables`, or the equivalent JVM `-Xmx`.
+2. Cut build parallelism — `make -j1`, Jest/Vite `--max-workers=2`, Turbo `--concurrency=1`.
+3. Split the build into sequential steps instead of one parallel monorepo build.
+4. Check whether the build only *recently* got heavier because a `prepareCommands` or `cache` change
+   invalidated the cache and forced a cold full build.
+5. Build elsewhere (CI) and ship the artifacts with `zcli service deploy`, skipping the build phase.

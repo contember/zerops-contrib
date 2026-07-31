@@ -6,6 +6,7 @@ build and deploy. Schema: `https://api.app-prg1.zerops.io/api/rest/public/settin
 ## Contents
 
 - [Structure](#structure)
+- [Two runtime shapes](#two-runtime-shapes)
 - [`setup` and `extends`](#setup-and-extends)
 - [`build`](#build)
 - [`deploy`](#deploy)
@@ -31,6 +32,54 @@ zerops:
 
 Multiple setups in one file support monorepos — one entry per service. Which entry is used is
 decided by, in order: `--setup` flag → `zeropsSetup` in import YAML → the service hostname.
+
+**One push deploys one setup.** `zcli push` targets a single service, so a monorepo needs one push
+per service:
+
+```sh
+zcli push -S <api-service-id> --setup api
+zcli push -S <worker-service-id> --setup worker
+```
+
+## Two runtime shapes
+
+Which keys are legal in `run` depends on the service type. Getting this wrong blocks the deploy.
+
+| | Process runtimes | Webserver runtimes |
+|---|---|---|
+| Types | `nodejs`, `bun`, `deno`, `go`, `python`, `rust`, `java`, `dotnet`, `elixir`, `gleam`, `alpine`, `ubuntu` | `php-apache`, `php-nginx`, `nginx`, `static` |
+| `start` / `startCommands` | **Required** — you launch the process | **Do not set** — the platform starts the server |
+| `ports` | **Required** to be reachable | **Do not set** — the HTTP port is implicit |
+| Specific keys | — | `documentRoot`, `siteConfigPath`, `routing` (static only) |
+
+A webserver runtime with subdomain access enabled gets its subdomain automatically; there is no
+port to declare. A minimal static service is:
+
+```yaml
+zerops:
+  - setup: web
+    build:
+      base: nodejs@22
+      buildCommands: [npm ci, npm run build]
+      deployFiles: dist/~        # note the ~ — see deployFiles below
+    run:
+      base: static
+```
+
+And a PHP service:
+
+```yaml
+zerops:
+  - setup: app
+    build:
+      base: php@8.4             # build base differs from run base
+      buildCommands: [composer install --no-dev]
+      deployFiles: [vendor, public, src, composer.json]
+      cache: [vendor, composer.lock]
+    run:
+      base: php-nginx@8.4
+      documentRoot: public      # relative to /var/www — not an absolute path
+```
 
 ## `setup` and `extends`
 
@@ -73,13 +122,36 @@ buildCommands:
 
 ### `deployFiles`
 
+**This is the entire runtime filesystem, not a list of build artifacts.** The runtime container
+runs no install step. Whatever the app needs at runtime must either be listed here or bundled into
+the build output:
+
+| Runtime | Typical `deployFiles` |
+|---|---|
+| Node.js / Bun | `[dist, package.json, node_modules]` — drop `node_modules` only if the bundler inlines dependencies |
+| PHP | `[vendor, public, src, composer.json]` |
+| Python | the app plus its virtualenv, or install into the runtime image via `run.prepareCommands` |
+| Go / Rust | just the compiled binary |
+| Static | `dist/~` |
+
 Paths are preserved: `./src/assets/fonts` → `/var/www/src/assets/fonts`.
 
 - `~` is a wildcard for one or more path segments: `./path/~/to/file.txt`.
 - `~` prefixed to a segment flattens the path: `./src/assets/~fonts` → `/var/www/fonts`.
-- A `.deployignore` file in the repo root excludes paths, using `.gitignore` pattern syntax
-  (leading `/` anchors to root; without it the pattern matches at any depth). It also applies to
-  `zcli service deploy`.
+- **`dist/~` deploys the *contents* of `dist/` to `/var/www`.** This is what static and webserver
+  services need — plain `deployFiles: ./dist` puts the site at `/var/www/dist` and every route 404s.
+
+#### `.deployignore`
+
+A `.deployignore` file in the repo root excludes paths, using `.gitignore` pattern syntax (leading
+`/` anchors to root; without it the pattern matches at any depth). It also applies to
+`zcli service deploy`.
+
+**Do not mirror `.gitignore` into it blindly.** `.gitignore` excludes `node_modules` and `vendor` —
+exactly the directories `deployFiles` must ship. An app deployed with both files aligned starts and
+then dies on a missing module, with nothing in the build log. If you keep the two files similar,
+re-add the dependency directories in `.deployignore` with a `!` negation, or list them explicitly
+and verify they arrived (`ls /var/www` over SSH or the web terminal).
 
 ### `cache`
 
@@ -115,8 +187,8 @@ cache layers (base + build). See `pipeline.md`.
 | `envReplace` | object | Placeholder substitution inside deployed files. |
 | `healthCheck` | object | Continuous liveness monitoring. |
 | `crontab` | list | Scheduled commands inside the container. |
-| `documentRoot` | string | Web root — webserver runtimes only (`php-apache`, `php-nginx`, `nginx`). |
-| `siteConfigPath` | string | Custom webserver config — webserver runtimes only. |
+| `documentRoot` | string | Web root, **relative to `/var/www`** — write `public`, not `/var/www/public`. Webserver runtimes only. |
+| `siteConfigPath` | string | Custom webserver config, path relative to `/var/www`; the file must be in `deployFiles`. Webserver runtimes only. |
 | `routing` | object | Redirects/headers/CORS — **static services only**. |
 
 ### `initCommands` vs `prepareCommands`
@@ -126,7 +198,19 @@ cache layers (base + build). See `pipeline.md`.
 | When | Every container start/restart/scale | Only when the runtime image is (re)built |
 | Cached | Never | Yes |
 | Deploy files present | Yes (`/var/www`) | **No** |
-| Use for | Migrations, cache warming, cleanup | OS packages, system libraries |
+| Use for | Migrations (see below), cache warming, cleanup | OS packages, system libraries |
+
+**`initCommands` run on every container, in parallel.** Containers deploy simultaneously, so a bare
+migration command races across replicas. Gate anything that must happen once per version:
+
+```yaml
+run:
+  initCommands:
+    - zsc execOnce ${ZEROPS_appVersionId} -- npm run db:migrate
+```
+
+`zsc execOnce <key> -- <cmd>` runs the command on exactly one container of the service and makes the
+others wait for its result. See `cli.md`.
 
 A non-zero exit from `initCommands` aborts the deploy: the appVersion goes to `DEPLOY_FAILED`,
 is never activated, and the previous version keeps serving. The *service* status still reads
@@ -220,8 +304,10 @@ run:
         grep -q "OK" /tmp/status
 ```
 
-Readiness retries for up to 5 minutes; then the container is deleted, recreated, and the deploy
-retried. Set `failureTimeout`/`retryPeriod` explicitly — do not rely on schema defaults.
+When readiness never passes: after `failureTimeout` the container is deleted and **the deploy
+fails** — the previously active appVersion keeps serving. (The older `features/pipeline` page
+describes a recreate-and-retry loop instead; the newer guide is authoritative and is what this
+skill follows.) Set `failureTimeout`/`retryPeriod` explicitly — do not rely on schema defaults.
 
 Production services should use **both**. Dev services driven interactively should use neither
 (a health check restarts the container mid-iteration).
@@ -237,11 +323,11 @@ run:
       workingDir: /var/www/html
 ```
 
-- `command` — required, any shell command; full env var access.
-- `timing` — required, standard 5-field cron (`min hour dom mon dow`). Minimum granularity 1 minute.
-- `allContainers` — `false` runs on one container (correct for DB jobs), `true` on all
-  (cache clearing, log rotation).
-- `workingDir` — defaults to `/var/www`.
+- `command` — **required**, any shell command; full env var access.
+- `timing` — **required**, standard 5-field cron (`min hour dom mon dow`). Minimum granularity 1 minute.
+- `allContainers` — **required by the schema.** `false` runs on one container (correct for DB jobs),
+  `true` on all (cache clearing, log rotation).
+- `workingDir` — optional, defaults to `/var/www`.
 
 `zsc crontab list` / `zsc crontab run` inspect and trigger these from inside a container.
 
@@ -265,6 +351,11 @@ config files that cannot read env vars.
 `config/jwt/`. List each subdirectory explicitly.
 
 ## `routing` (static services only)
+
+**SPA routing needs no configuration.** A static service already falls back through `$uri` →
+`$uri.html` → `$uri/index.html` → `/index.html` → 404. Adding a `/*` → `/index.html` redirect
+breaks the site: every JS and CSS request gets redirected instead of served. Use `routing` only for
+genuine redirects, headers and CORS.
 
 ```yaml
 run:
@@ -310,11 +401,10 @@ Silently ignored on non-static services.
 
 1. `run` is required; `build` and `deploy` are optional (a service can be deploy-only).
 2. There is **no `mount` key in `zerops.yaml`** — shared storage is attached via the `mount:` field
-   in the *import* YAML or in the GUI. A `run.mount` is silently ignored.
-3. `envVariables` under `run` are baked into the app version — changing them needs a **redeploy**,
-   not a restart. Secrets (import YAML / GUI) need only a restart.
-4. A key declared in `run.envVariables` cannot also exist as a secret — the platform rejects the
-   secret with `userDataDuplicateKey`. The YAML owns the key.
-5. PHP uses different build and run bases: build `php@8.4`, run `php-nginx@8.4` or `php-apache@8.4`.
-6. Deno has no Alpine build — it requires `os: ubuntu`.
-7. Static sites typically build on `nodejs@latest` and run on `static`.
+   in the *import* YAML or in the GUI. A `run.mount` passes schema validation and is then silently
+   stripped: no mount, no error.
+3. PHP uses different build and run bases: build `php@8.4`, run `php-nginx@8.4` or `php-apache@8.4`.
+4. Deno has no Alpine build — it requires `os: ubuntu`.
+
+Variable timing (`run.envVariables` ⇒ redeploy, secrets ⇒ restart) and the
+`userDataDuplicateKey` collision are in [`env-variables.md`](env-variables.md#when-changes-take-effect).

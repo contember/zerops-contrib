@@ -15,6 +15,7 @@ service), two phases (build, runtime), and strict isolation between sibling serv
 - [Secrets](#secrets)
 - [Naming rules](#naming-rules)
 - [When changes take effect](#when-changes-take-effect)
+- [Rotating a credential](#rotating-a-credential)
 - [`envReplace`](#envreplace)
 - [Local development](#local-development)
 
@@ -134,7 +135,7 @@ Build and runtime are separate containers with separate variable stores.
 | Want | From | How |
 |---|---|---|
 | Runtime var `API_KEY` | build container | `${RUNTIME_API_KEY}` — runtime `run.envVariables` are known at build time |
-| Build var `BUILD_ID` | runtime container | **Not possible.** The build container is destroyed and its variables are not carried over; `${BUILD_BUILD_ID}` arrives as a literal string. Write the value into a deployed file, or recompute at runtime. |
+| Build var `BUILD_ID` | runtime container | **Does not work in practice.** The build container is destroyed and its variables are not carried into the runtime store; `${BUILD_BUILD_ID}` arrives as a literal string. (The older reference page documents a `BUILD_` prefix for this; the newer guide says it does not work — do not rely on it.) Write the value into a deployed file, or recompute at runtime. |
 
 ```yaml
 build:
@@ -184,11 +185,38 @@ services:
 | `run.envVariables` in `zerops.yaml` | Full **redeploy** — baked into the app version |
 
 An env-store change reaches the container in ~5–10 s, but a **running process keeps its boot-time
-environment**. Only newly spawned processes see the new value. Reload is not enough — PHP-FPM in
-particular keeps its boot config.
+environment**. Only newly spawned processes see the new value. A *reload* is not enough — it does
+not re-read the environment, and PHP-FPM in particular keeps its boot config. (The older reference
+page says "reload"; the newer guide says restart, and restart is what actually works.)
+
+**There is no `zcli service restart`.** Use the GUI's Restart action, or `zcli service stop` then
+`zcli service start`. With `minContainers: 1` that is a hard outage — see the rotation recipe below.
 
 Restoring an archived app version also restores the variables to their state when that version was
 last active.
+
+## Rotating a credential
+
+A restart is not zero-downtime on a single-container service, and a database password lives in two
+places that do not synchronise. Sequence for a live rotation:
+
+**Application secret (API key, signing key)**
+
+1. Add the new value under a **new key** (`API_KEY_NEXT`) in `envSecrets`.
+2. Deploy code that accepts either key.
+3. Move the new value onto `API_KEY`, restart, verify.
+4. Remove `API_KEY_NEXT`.
+
+**Database password**
+
+1. Ensure `minContainers: 2` or accept the outage.
+2. `ALTER USER db WITH PASSWORD '<new>'` in the database.
+3. Update the `password` env variable on the **database** service — changing it in the database does
+   not update the variable, and `connectionString` is derived from it.
+4. Restart the consuming services so they pick up the new value.
+
+Verify from inside a container (`zcli project env --service app`, or read the process environment);
+the API returns stored templates, not resolved values.
 
 ## `envReplace`
 

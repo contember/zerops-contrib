@@ -5,13 +5,18 @@
 - [Project core](#project-core)
 - [Autoscaling](#autoscaling)
 - [Vertical autoscaling](#vertical-autoscaling)
+  - [Changing scaling on a live service](#changing-scaling-on-a-live-service)
 - [Horizontal scaling](#horizontal-scaling)
+  - [Moving a managed database to HA](#moving-a-managed-database-to-ha)
 - [Persistence](#persistence)
 - [Object storage](#object-storage)
 - [Shared storage](#shared-storage)
 - [Backups](#backups)
+  - [Coverage](#coverage)
+  - [Schedule, tags, retention](#schedule-tags-retention)
+  - [Restoring](#restoring)
 - [Logging](#logging)
-- [Metrics](#metrics)
+- [Metrics and observability](#metrics-and-observability)
 - [Production checklist](#production-checklist)
 
 ## Project core
@@ -114,24 +119,46 @@ Set min = max for the resource: `minRam: 2, maxRam: 2`.
 
 ### Presets
 
+Fields for a `services:` entry in the import YAML:
+
 ```yaml
-# Development
-minContainers: 1
-maxContainers: 1
-verticalAutoscaling: { cpuMode: SHARED, minCpu: 1, maxCpu: 2, minRam: 0.25, maxRam: 1 }
-
-# Production
-minContainers: 2
-maxContainers: 6
-verticalAutoscaling: { cpuMode: DEDICATED, minCpu: 2, maxCpu: 8, minRam: 2, maxRam: 8 }
-
-# Burst
-minContainers: 1
-maxContainers: 10
-verticalAutoscaling: { cpuMode: SHARED, minCpu: 1, maxCpu: 8, minRam: 1, maxRam: 16 }
+services:
+  - hostname: app
+    type: nodejs@22
+    # Development — cheapest
+    minContainers: 1
+    maxContainers: 1
+    verticalAutoscaling: { cpuMode: SHARED, minCpu: 1, maxCpu: 2, minRam: 0.25, maxRam: 1 }
 ```
 
-Temporary manual override from inside a container: `zsc scale` (see [`cli.md`](cli.md#zsc-scale-cpuram-value-durationauto)).
+Production, same shape: `minContainers: 2`, `maxContainers: 6`,
+`verticalAutoscaling: { cpuMode: DEDICATED, minCpu: 2, maxCpu: 8, minRam: 2, maxRam: 8 }`.
+Burst: `minContainers: 1`, `maxContainers: 10`,
+`verticalAutoscaling: { cpuMode: SHARED, minCpu: 1, maxCpu: 8, minRam: 1, maxRam: 16 }`.
+
+### Changing scaling on a live service
+
+`verticalAutoscaling` and `minContainers`/`maxContainers` in the import YAML apply **at creation**.
+Re-importing does not update a running service: `service-import` on an existing hostname is not an
+update path, and `override: true` works only for runtime services, where it *replaces* the service
+and forces a redeploy.
+
+To change CPU mode, min/max CPU/RAM/disk, thresholds or container count on an existing service:
+**GUI → service → Automatic scaling configuration**, or the REST API. Everything except the
+`:single`/`:ha` variant can be changed there. PostgreSQL's `profile` can also be changed at any
+time.
+
+Decide from evidence: **GUI → Service containers & Overview** shows CPU, RAM and disk over time,
+container-count changes, and past scaling events.
+
+`zsc scale` is a *temporary* override inside the configured min/max — it cannot exceed the
+configured maximum and silently clamps, so it is not a way to apply a config change. See
+[`cli.md`](cli.md#zsc-scale-cpuram-value-durationauto).
+
+**PostgreSQL restarts on some scaling changes.** Zerops regenerates the config and applies it with a
+reload; if the granted RAM crosses a memory step — `256 MiB`, `512 MiB`, `1 GiB`, `2 GiB`, `4 GiB`,
+then multiples of `8 GiB` — it restarts instead (rolling in HA, a short outage in single). Keep
+`minRam` and `maxRam` within one step to rule restarts out.
 
 ## Horizontal scaling
 
@@ -144,6 +171,23 @@ state that matters. Otherwise scaling silently breaks behavior.
 Managed services scale by the `:single` / `:ha` type variant only, immutable after creation. HA
 recovery disconnects the failed container, creates a replacement on different hardware, syncs data
 from healthy copies, and removes the failed one. PostgreSQL HA also exposes read replicas on 5433.
+
+### Moving a managed database to HA
+
+`:single` → `:ha` is a **new service**, not an edit, and hostnames are unique within a project — so
+this is a data migration, not a toggle. Do not start by deleting anything.
+
+1. **Back up** with a protected tag: `zcli backup create db --tags pre-ha-migration,protected`.
+2. **Create the new service** under a different hostname (`dbha`), with the `:ha` variant. Set
+   `profile` explicitly — HA defaults to `oltp-production`, which over-provisions.
+3. **Move the data** over the VPN: `pg_dump`/`pg_restore` from old to new, or restore the downloaded
+   backup schema by schema.
+4. **Repoint every `${db_*}` reference** in `zerops.yaml` to the new hostname, redeploy, and verify
+   the app actually talks to the new database.
+5. **Delete the old service last.** Its backups survive 7 days.
+
+If the hostname must stay `db`, that is a second migration: rename by repeating the process back
+onto a freshly created `db` after the old one is gone.
 
 Docker services run in **VMs**: no autoscaling, resource or VM-count changes restart the VM, disk
 can only grow. Always pin image tags — `:latest` is cached and will not re-pull.
@@ -189,7 +233,16 @@ services:
 - Multiple storages can mount into one service.
 - The mount point is owned by the `zerops` user — no sudo needed.
 - Mounting **removes existing content** of the mount directory.
-- Connecting/disconnecting is applied live without restarting containers.
+- Connecting registers the link immediately, but **the FUSE mount only materialises on the next
+  fresh deploy** (new container creation) — a plain restart does not bring it up. Redeploy after
+  connecting.
+- A runtime that was not yet deployed at import time does not pick up the import `mount:`; connect
+  it explicitly once it is active.
+- HA storage replicates 1:1 with automatic failover; the mount is briefly unavailable (~30 s)
+  during a master failover.
+- A shared-storage service holds at most **60 GB of data** regardless of disk scaling. For user
+  uploads and high-write churn prefer object storage — shared storage is POSIX/NFS-style and not
+  built for throughput.
 - Mount output is logged as `zerops-mount-<hostname>`; individual file operations are not.
 - `df` reports misleading numbers for these mounts — trust the GUI.
 - Disconnect from all services before stopping or deleting the storage service.
@@ -199,11 +252,75 @@ Connect in the GUI (*Shared storage connections*), via `mount:` in the import YA
 
 ## Backups
 
-- Managed databases support scheduled backups; enable them for production.
-- Backup space is included in the core package (5 GB Lightweight, 25 GB Serious).
-- Trigger manually from a container with `zsc backup-create <stackName>`.
-- Object storage is **not** backed up by Zerops — use `zsc object-storage backup` on a cron, or
-  your own tooling.
+**Backups run automatically every day between 00:00 and 01:00 UTC by default** — there is nothing
+to switch on. Manage them at GUI → service → **Backups List & Configuration**.
+
+### Coverage
+
+| Covered | Not covered |
+|---|---|
+| PostgreSQL, MariaDB, Qdrant, Elasticsearch, NATS, Meilisearch, **Shared Storage** | Runtimes, **Object Storage**, **Valkey / KeyDB** (in-memory) |
+
+**ClickHouse** is not on the automatic path — use the native `BACKUP ALL …` SQL command as
+superuser, which produces a `.tar.gz`.
+**Object storage** needs its own scheme: S3 lifecycle policies, or `zsc object-storage backup` on a
+cron (see [`cli.md`](cli.md#zsc-object-storage)).
+
+### Schedule, tags, retention
+
+Schedules: none / daily (default) / weekly / monthly / custom CRON (`min hour dom mon dow`).
+
+Tags drive retention:
+
+- **Automatic**: `daily` on every automatic backup, `weekly` on the first of each week (Monday UTC),
+  `monthly` on the first of each month.
+- **User tags**: up to 24 chars, `[A-Za-z0-9:-_]`.
+- **Protected tags**: named in the retention config; those backups are exempt from automatic
+  deletion.
+
+**Manual backups get no automatic time tag, so without a protected tag they can be pruned.** Always
+tag a pre-migration backup.
+
+Retention defaults: at least 7 daily + 4 weekly + 3 monthly, max 50 backups per service. Storage:
+5 GB included on Lightweight, 25 GB on Serious, 1 TiB technical maximum per project; beyond the
+included tier it is billed. A backup that would exceed the storage limit is simply not stored.
+
+Backups are encrypted end-to-end with a per-project X25519 key and decrypted only on download.
+After a service or project is deleted, backups survive a **7-day grace period** — then the key is
+destroyed and the data is unrecoverable.
+
+### Taking one before a risky change
+
+```sh
+zcli backup create db --tags pre-migration,protected
+```
+
+This is the only headless backup command; listing, deletion and tag management are GUI-only.
+`zsc backup-create <stackName>` does the same from inside a container.
+
+### Restoring
+
+Zerops creates and stores backups; **restore is service-specific and manual**. Download the backup
+from the GUI, then:
+
+| Service | Format | Restore |
+|---|---|---|
+| PostgreSQL | `.zip` of per-schema `pg_dump -Fc` dumps | `pg_restore -d db <schema>.dump` per schema. Plain `psql` cannot read these — convert first with `pg_restore -f schema.sql <schema>.dump` if you need SQL |
+| MariaDB | `.xb.gz` (`mariabackup`, xbstream + gzip) | mariabackup restore — **not** a `mysqldump` file |
+| Shared storage | `.tar.gz` | `tar -xzf backup.tar.gz -C /mnt/<hostname>` from a runtime container that has it mounted. Not through the Filer UI, which caps uploads at 64 MB |
+| Elasticsearch | `.gz` (elasticdump) | elasticdump |
+| Meilisearch | `.dump` | Meilisearch import |
+| Qdrant | `.snapshot` | Qdrant snapshot restore |
+| NATS | `.tar.gz` | extract |
+
+Reach the database over the VPN to run these. **Test a restore periodically in a non-production
+project** — an untested backup is a guess.
+
+### When a backup fails
+
+Check the service log around the scheduled time, verify the service is healthy and has resources,
+check `status.zerops.io` for platform incidents, then contact support with the service name, the
+failure time and the logs.
 
 ## Logging
 
@@ -222,11 +339,46 @@ Forwarding is available to Better Stack, Papertrail, and self-hosted ELK. Zerops
 **UDP syslog** — a self-hosted Logstash must listen on UDP. In a custom `syslog-ng` config use the
 source name `s_src` (not `s_sys`); system certificates live at `/etc/ssl/certs`.
 
-## Metrics
+## Metrics and observability
 
-Managed services export Prometheus-compatible metrics on the port in `ZEROPS_PROMETHEUS_PORT`
-(e.g. `db:9121`). Project statistics are visible in the GUI; forwarded statistics survive a core
-upgrade, in-project ones do not.
+Built-in: **GUI → Service containers & Overview** for CPU/RAM/disk history, container count and
+past scaling events. That is the first place to look for a resource question. Project statistics are
+lost on a core upgrade; forwarded ones are not.
+
+### Advanced Observability
+
+A one-click GUI integration that deploys a self-hosted stack, either into the project (**local**) or
+into a dedicated project (**global**):
+
+- **ELK** — Elasticsearch as `elkstorage`, Kibana as `kibana`, plus `apmserver` for tracing and
+  `logstash` for log collection.
+- **Prometheus + Grafana** — `prometheus`, `grafana`, `grafanadb` (Postgres), `prometheusbackups`
+  (S3, since Prometheus is single-instance filesystem-only). A `prometheuslight` forwarder service
+  in a source project remote-writes into a central one.
+
+Credentials for Kibana / Grafana are in the project's **Advanced Observability** section in the GUI.
+Out-of-the-box dashboards cover service scaling and resources, PostgreSQL (with HAProxy metrics in
+HA), MariaDB and Valkey.
+
+### Exposing your own metrics
+
+`ZEROPS_PROMETHEUS_PORT` is a variable **you set on your own service**, not a platform-provided
+value:
+
+1. Expose an HTTP `/metrics` endpoint on any port. Only the `/metrics` path is scraped and the path
+   is not configurable.
+2. Set `ZEROPS_PROMETHEUS_PORT` on the service — `9090`, or `9090,9091` for several ports.
+
+Managed services expose their own exporters on this variable too (e.g. Valkey at `db:9121`).
+
+Some PostgreSQL dashboards need `CREATE EXTENSION IF NOT EXISTS pg_stat_statements;` as superuser
+followed by a service restart.
+
+### Tracing
+
+APM through the ELK stack: set `ELASTIC_APM_ACTIVE=true` (it defaults to `false` on Zerops),
+`ELASTIC_APM_SERVICE_NAME`, `ELASTIC_APM_SERVER_URL` and `ELASTIC_APM_SECRET_TOKEN` from the GUI,
+then restart the service. Traces appear in Kibana under *Applications → Traces*.
 
 ## Production checklist
 
@@ -234,7 +386,7 @@ upgrade, in-project ones do not.
 
 | | Dev | Production |
 |---|---|---|
-| Variant | `postgresql:single@18` | `postgresql:ha@18` — **must recreate** |
+| Variant | `postgresql:single@18` | `postgresql:ha@18` — [data migration, not a toggle](#moving-a-managed-database-to-ha) |
 | Profile | `oltp-hobby` | `oltp-staging`, escalate only on clear load |
 | Backups | optional | enabled |
 | Reads | single primary | primary + replicas on 5433 |

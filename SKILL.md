@@ -1,6 +1,6 @@
 ---
 name: zerops
-description: Build, configure, deploy and operate applications on Zerops (zerops.io) — a bare-metal PaaS. Covers the two YAML files (`zerops.yaml` build/run pipeline in the repo, and the project/service import YAML), the service catalog and version strings, environment variables and cross-service references, private/public networking, the `zcli` CLI and in-container `zsc` utility, autoscaling, storage, and the build & deploy lifecycle. Use whenever the user mentions Zerops, zerops.yaml / zerops.yml, zerops-import.yaml, zcli, zsc, `.zerops.app` subdomains, `buildFromGit`, `deployFiles`, `envSecrets`, `yamlPreprocessor`, `zeropsSubdomainHost`, service types like `postgresql:ha@18` / `php-nginx@8.4` / `object-storage`, or asks to deploy, provision, scale, or debug an app on Zerops.
+description: Build, configure, deploy and operate applications on Zerops (zerops.io) — a bare-metal PaaS. Covers `zerops.yaml` (build/run pipeline, in the repo) and the project/service import YAML, the service catalog and version strings, environment variables and cross-service references, networking, `zcli`/`zsc`, autoscaling, storage, backups and the deploy lifecycle. Use whenever the user mentions Zerops, zerops.yaml / zerops.yml, zerops-import.yaml, zcli, zsc, `.zerops.app` subdomains, `buildFromGit`, `deployFiles`, `envSecrets`, `yamlPreprocessor`, `zeropsSubdomainHost`, service types like `postgresql:ha@18` / `php-nginx@8.4` / `object-storage`; whenever the working repository contains a `zerops.yaml`, `zerops.yml` or `zerops-import.yaml`; or when asked to deploy, provision, scale, roll back, or debug an app on Zerops.
 ---
 
 # Zerops
@@ -26,8 +26,10 @@ A service must already exist (via import or GUI) before `zerops.yaml` can target
 ## Mental model
 
 **Project** → private VXLAN network + L7 balancer + core (logger, stats, firewall, SSL).
-**Service** → one addressable unit, reachable at `http://<hostname>:<port>` from any sibling.
-**Container** → 1..10 replicas of a service; ephemeral, replaced on every deploy.
+**Service** → one addressable unit, reachable at `<hostname>:<port>` from any sibling.
+**Container** → the replicas of a service. Runtimes and Linux containers scale 1–10; managed
+services have a fixed count set by the `:single` / `:ha` type variant. Containers are ephemeral
+and replaced on every deploy.
 
 Managed services (databases, caches, search, queues, storage) are provisioned, not built.
 Runtime services (nodejs, php, go, …) are built from your repo by the pipeline.
@@ -43,7 +45,7 @@ project:
 services:
   - hostname: app
     type: nodejs@22
-    enableSubdomainAccess: true
+    enableSubdomainAccess: true   # .zerops.app subdomain — dev/testing only
     minContainers: 1
     maxContainers: 2
   - hostname: db
@@ -61,7 +63,10 @@ zerops:
       buildCommands:
         - npm ci
         - npm run build
-      deployFiles: ./dist
+      deployFiles:            # the whole runtime filesystem, not just build output
+        - ./dist
+        - ./package.json
+        - ./node_modules      # omit only if the build bundles dependencies
       cache: node_modules
     run:
       base: nodejs@22
@@ -75,10 +80,16 @@ zerops:
 
 Then `zcli push`.
 
+Webserver runtimes (`php-apache`, `php-nginx`, `nginx`, `static`) are shaped differently — no
+`start`, no `ports`. See `references/zerops-yaml.md`.
+
 ## Rules that break apps when ignored
 
 1. **Bind `0.0.0.0`**, never `127.0.0.1`/`localhost` — the #1 cause of 502 from the balancer.
-2. **Internal traffic is plain `http://`** — TLS terminates at the L7 balancer. `https://api:3000` fails.
+2. **Internal HTTP is plain `http://`** — TLS terminates at the L7 balancer, so `https://api:3000`
+   fails. This is about HTTP between services; non-HTTP protocols just connect to `hostname:port`
+   with their own TLS rules (Postgres `5432` plaintext but `6432` TLS-required, Valkey `6379`
+   plaintext / `6380` TLS).
 3. **Cross-service env vars are NOT auto-injected.** Under the default `envIsolation: service` you
    must declare `DB_HOST: ${db_hostname}` in `run.envVariables`. An unresolved `${...}` reaches
    the process as a literal string — no error, no blank.
@@ -86,10 +97,16 @@ Then `zcli push`.
    `${FOO}`. Project variables are already inherited; just read them.
 5. **The container filesystem is replaced on every deploy.** Restarts keep it; deploys and scale-ups
    do not. Uploads → object storage, sessions → Valkey.
-6. **`build.deployFiles` decides what reaches `/var/www`.** Anything omitted is gone at runtime.
-7. **HA is immutable.** `postgresql:single@18` → `postgresql:ha@18` requires delete + recreate.
-8. **`run.initCommands` run on every container start** and a non-zero exit aborts the deploy.
-   Keep them idempotent.
+6. **`build.deployFiles` is the entire runtime filesystem**, not a list of build outputs. Nothing
+   reinstalls dependencies at runtime — an unbundled app must ship `node_modules` / `vendor` and its
+   manifest too.
+7. **Each command list item runs in its own shell.** `cd` and `export` do not carry to the next item;
+   use a `|` block scalar when they must.
+8. **`run.initCommands` run on every container start, in parallel across containers**, and a
+   non-zero exit aborts the deploy. Gate once-per-version work with
+   `zsc execOnce ${ZEROPS_appVersionId} -- <cmd>`.
+9. **HA is immutable.** `postgresql:single@18` → `postgresql:ha@18` is a new service, not an edit —
+   back up and migrate the data first (`references/operations.md`).
 
 ## Where to look
 
@@ -97,27 +114,24 @@ Read only the file you need.
 
 | Task | File |
 |---|---|
-| Write or fix `zerops.yaml`; build/run/deploy keys, cron, health checks, `extends`, `envReplace`, static routing | `references/zerops-yaml.md` |
+| Write or fix `zerops.yaml`; build/run/deploy keys, webserver vs process runtimes, cron, health checks, `extends`, `envReplace`, static routing | `references/zerops-yaml.md` |
 | Provision or export projects/services; autoscaling fields, `envSecrets`, `buildFromGit`, `yamlPreprocessor` functions | `references/import-yaml.md` |
-| Pick a service type or version string; per-service generated env vars, ports, connection strings | `references/service-catalog.md` |
-| Env var scopes, isolation, precedence, build↔runtime bridging, secrets | `references/env-variables.md` |
-| Hostnames, ports, subdomains, custom domains, L7 balancer, firewall, VPN/SSH, 502 debugging | `references/networking.md` |
-| `zcli` commands and config; `zsc` in-container commands | `references/cli.md` |
-| Build phase, cache, runtime-prepare images, deploy strategy, readiness vs health checks, CI/CD | `references/pipeline.md` |
-| Autoscaling, storage, backups, logging, metrics, production checklist | `references/operations.md` |
+| Pick a service type or version string; per-service generated env vars, ports, connection strings, DB admin access | `references/service-catalog.md` |
+| Env var scopes, isolation, precedence, build/runtime bridging, secrets, rotating a credential | `references/env-variables.md` |
+| Hostnames, ports, subdomains, custom domains, L7 balancer, firewall and outbound ports, VPN, SSH and the web terminal, 502 debugging | `references/networking.md` |
+| `zcli` commands and config; what `zcli` cannot do and the REST API; `zsc` in-container commands — run once across HA (`execOnce`), keep a container alive (`noop`), debug-mode control, temporary scaling, backups | `references/cli.md` |
+| Build phase, cache, runtime-prepare images, deploy strategy, readiness vs health checks, debug mode, CI/CD, diagnosing a failed build or deploy | `references/pipeline.md` |
+| Autoscaling and changing it on a live service, storage, backup and restore, HA migration, logging, observability, production checklist | `references/operations.md` |
+
+Version tables in `references/service-catalog.md` are generated — refresh with
+`scripts/sync-docs.sh` (`--check` to inspect drift first).
 
 ## Editor validation
 
 Both files have official JSON Schemas, auto-applied via SchemaStore when named
-`zerops.yaml` / `zerops.yml` and `zerops-import.yaml` / `zerops-*-import.yaml`:
-
-```
-https://api.app-prg1.zerops.io/api/rest/public/settings/zerops-yml-json-schema.json
-https://api.app-prg1.zerops.io/api/rest/public/settings/import-project-yml-json-schema.json
-```
-
-Add a `# yaml-language-server: $schema=<url>` modeline for non-standard filenames. Prefer schema
-validation in the editor over guessing key names.
+`zerops.yaml` / `zerops.yml` and `zerops-import.yaml` / `zerops-*-import.yaml`. URLs and the
+modeline for non-standard filenames are in `references/zerops-yaml.md` and
+`references/import-yaml.md`. Prefer schema validation in the editor over guessing key names.
 
 ## Verification loop
 
@@ -127,15 +141,20 @@ Never claim a deploy works without evidence:
 zcli push                                   # build + deploy, streams the build log
 zcli service log -S <service-id> --follow   # runtime log
 zcli service log -S <service-id> --show-build-logs
-curl -sS https://<hostname>-<subdomainHost>.zerops.app/health   # or http://<hostname>:<port> from a sibling
+zcli service log -S <service-id> --message-type WEBSERVER   # 502s on nginx/apache runtimes
 ```
+
+Then reach the app. Internally from any sibling or over the VPN — this always works and does not
+depend on public access being configured:
+
+```sh
+curl -sS http://app:3000/health
+```
+
+Publicly, the subdomain is `{hostname}-{prefix}[-{port}].{rest}`, e.g.
+`https://app-1df2-3000.prg1.zerops.app`. Do not compose it from memory — read the real value from
+the GUI or `zcli project env`, because the port suffix and region segment vary. See
+`references/networking.md`.
 
 Build has a hard **60-minute** limit. `stack.build` reaching `FINISHED` means the build is done;
 the deploy is done when the new appVersion is `ACTIVE`.
-
-## Keeping this skill current
-
-`scripts/sync-docs.sh` pulls `github.com/zeropsio/docs`, regenerates the version tables in
-`references/service-catalog.md` from upstream `data.json`, and lists which upstream pages changed
-since the last sync so the prose can be reviewed. Run `scripts/sync-docs.sh --check` to see drift
-without writing anything.

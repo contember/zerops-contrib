@@ -12,6 +12,7 @@ Two different tools:
 - [`zcli` install and auth](#zcli-install-and-auth)
 - [`zcli` configuration](#zcli-configuration)
 - [`zcli` commands](#zcli-commands)
+- [What `zcli` cannot do](#what-zcli-cannot-do)
 - [`zsc` commands](#zsc-commands)
 
 ## `zcli` install and auth
@@ -96,10 +97,17 @@ Special variables:
 | `zcli service create` | `--name`, `--mode ha\|non_ha`, `--env`, `--env-file`, `--start-without-code`, `--noop` (create only if absent), `--zerops-yaml-path` |
 | `zcli service push [service]` | **Build in Zerops and deploy.** The usual way to ship. Alias: `zcli push` |
 | `zcli service deploy [service]` | Deploy pre-built artifacts, skipping the build phase |
-| `zcli service start\|stop [service]` | |
+| `zcli service start\|stop [service]` | **There is no `zcli service restart`.** Restart = `stop` then `start`, or the GUI's Restart action |
 | `zcli service delete [service]` | `--confirm` |
 | `zcli service enable-subdomain [service]` | |
 | `zcli service log` | See below |
+| `zcli backup create <service>` | `--tags pre-deploy,protected`. The one headless command for taking a backup before a risky change. Listing, deletion and tag management are GUI-only |
+
+`zcli push` and the other service commands accept a service **name** as a positional argument, not
+only an ID.
+
+**One push deploys one setup.** In a monorepo, run it once per service with the matching
+`--setup`.
 
 #### `push` / `deploy` flags
 
@@ -154,6 +162,38 @@ Package-manager installs refuse to self-swap and print the right command (`npm i
 curl -fsSL https://raw.githubusercontent.com/zeropsio/zcli/main/install.sh | sh -s -- v1.0.67
 ```
 
+## What `zcli` cannot do
+
+A large part of day-2 management has no CLI command. Do not invent one — reach for the GUI or the
+REST API instead.
+
+| Task | Surface |
+|---|---|
+| Restart a service | GUI (Restart), or `zcli service stop` + `start` |
+| Reload a service | GUI. Note a reload does **not** re-read environment variables |
+| Change scaling / CPU mode / container count | GUI → **Automatic scaling configuration**, or REST |
+| Roll back (activate an archived app version) | GUI → *Pipelines & CI/CD settings*, or REST `/app-version` |
+| Read appVersion status, build/deploy state | GUI, or REST `/app-version` |
+| Configure domains, ports, firewall rules | GUI, or REST `/public-http-routing`, `/public-port-routing` |
+| Backup schedule, retention, restore, download | GUI → **Backups List & Configuration** (`zcli backup create` covers creation only) |
+| Set or read env vars beyond `zcli project env` | GUI, or REST `/user-data`, `/project-env` |
+
+### REST API
+
+```
+Base URL:  https://api.app-prg1.zerops.io/api/rest/public
+Auth:      Authorization: Bearer <personal access token>
+Swagger:   https://api.app-prg1.zerops.io/api/rest/public/swagger
+```
+
+Token from GUI → Settings → **Access Token Management**. Non-obvious resource names:
+`/service-stack` manages services, `/user-data` manages environment variables. Other useful groups:
+`/app-version` (builds, deploys, rollback), `/project`, `/project-env`, `/public-http-routing`,
+`/public-port-routing`.
+
+Scope CI tokens to the narrowest project that will work, and keep production tokens out of shared
+CI where a branch build can read them.
+
 ## `zsc` commands
 
 Run inside containers — from the GUI web terminal, over SSH, or from `zerops.yaml` commands.
@@ -185,6 +225,25 @@ zsc execOnce ${ZEROPS_appVersionId} -- php /var/bin/console migrations:continue
 
 `-r/--retryUntilSuccessful` retries on a different container until it succeeds. On failure without
 that flag, all containers report the command failed.
+
+### `zsc debug continue|success|fail`
+
+Available only while a pipeline is **paused by debug mode**. Configure the pause points first in
+GUI → service → *Pipelines & CI/CD settings*, per phase (build / runtime-prepare): *Disable*,
+*Before first command*, *On command fail*, *After last command*. Then connect to the paused
+container and drive it:
+
+| Command | Before first command | On command fail | After last command |
+|---|---|---|---|
+| `zsc debug continue` | run the phase's commands | skip the failed command, carry on | move to the next phase |
+| `zsc debug success` | end the phase without running anything | ignore the failure, mark success | mark the phase successful |
+| `zsc debug fail` | mark the phase failed | end with the original error | overwrite success with failure |
+
+*On command fail* on the build phase is the tool for triaging a failing build — it holds the
+container at the moment of failure so you can inspect state.
+
+Caveats: the 60-minute build limit **includes the paused time**; `zsc debug success` requires valid
+`deployFiles`; settings persist until changed, so disable both phases when finished.
 
 ### `zsc noop`
 

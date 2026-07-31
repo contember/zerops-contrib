@@ -84,17 +84,18 @@ services:
 | `hostname` | string, required | Max **25 chars, lowercase `[a-z0-9]` only** — dashes, underscores and uppercase are rejected (`serviceStackNameInvalid`). Unique within the project. |
 | `type` | enum, required | Service type + version. See `service-catalog.md`. |
 | `profile` | string | Scaling/tuning preset — PostgreSQL and Valkey only. See `service-catalog.md`. |
-| `profileOverrides` | map | Individual engine params; valid **only** with `profile: custom`. |
-| `mode` | enum | **Deprecated.** `NON_HA` ≡ `:single`, `HA` ≡ `:ha`. Still remapped but ignored by validation — author new YAML with the `:single`/`:ha` type variant. |
-| `envSecrets` | map | Secret variables — masked in the GUI, editable later, no redeploy needed (restart required). |
+| `profileOverrides` | map | Individual engine params. PostgreSQL requires `profile: custom` for these; Valkey accepts them alongside any profile. |
+| `mode` | enum | `NON_HA` / `HA`. **Deprecated only where a `:single`/`:ha` type variant exists** (PostgreSQL, MariaDB, ClickHouse, Valkey, shared storage, SeaweedFS) — there, write the variant. For Elasticsearch, Typesense, Kafka and other services with no variant, `mode: HA` is still the documented and only way to get HA. |
+| `envSecrets` | map | Secret variables — masked in the GUI, editable later, no redeploy needed (restart required). **The only way to set service variables from the import YAML**; there is no `services[].envVariables`. Non-secret runtime variables go in `zerops.yaml` `run.envVariables`. |
 | `dotEnvSecrets` | string (multiline) | Same, in `.env` format. |
+| `sshIsolation` | string | SSH access rules, default `vpn`. See [`networking.md`](networking.md#sshisolation). |
 | `envIsolation` | enum | Per-service override of the project setting. May also be nested under `envVariables`/`envSecrets`, in which case the nested value wins. |
 | `buildFromGit` | URL | One-time build from a **public** GitHub/GitLab repo. A private repo fails at clone with no build log. **No trailing `.git`** — that fails the same way. |
 | `startWithoutCode` | bool | Default `false`. `true` starts runtime containers before any deploy — useful for a container to SSH into. Version working setup steps into `run.prepareCommands` afterwards. |
 | `enableSubdomainAccess` | bool | Default `false`. Enables the `.zerops.app` subdomain. Dev/testing only. |
 | `priority` | integer | Higher = created sooner. Use it to bring databases up before the app. |
 | `override` | bool | Default `false`. **Runtime services only.** `true` replaces an existing service of the same hostname and triggers a redeploy. |
-| `objectStorageSize` | integer | GB, object-storage only. |
+| `objectStorageSize` | integer | Whole number 1–100 (GB), object-storage only. Changeable in the GUI afterwards. |
 | `objectStoragePolicy` | enum | `private` / `public-read` / `public-objects-read` / `public-write` / `public-read-write` / `custom`. |
 | `objectStorageRawPolicy` | JSON | Custom S3 policy; `{{ .BucketName }}` placeholder available. |
 | `mount` | list of strings | Shared-storage hostnames to mount. Requires `buildFromGit`. |
@@ -187,7 +188,8 @@ services:
             deployFiles: ./
             cache: node_modules
           run:
-            initCommands: [npm run db:migrate]
+            # execOnce — initCommands run on every container in parallel
+            initCommands: [zsc execOnce ${ZEROPS_appVersionId} -- npm run db:migrate]
             start: npm start
 ```
 
@@ -307,12 +309,8 @@ A space before `|` inside a **function** expression is not included in the outpu
 
 1. `#yamlPreprocessor=on` must be the **first line**. Missing it silently leaves `<@…>` as literal
    secret values.
-2. `hostname` charset is strict — `my-app` and `myApp` are rejected. This is why cross-service
-   references are plain `${hostname_varname}` with no rewriting.
-3. `mode:` is deprecated. Write `postgresql:ha@18`, not `postgresql@18` + `mode: HA`.
-4. `override: true` only affects runtime services and triggers a redeploy.
-5. `buildFromGit` requires a public repo and no `.git` suffix.
-6. `mount` without `buildFromGit` does nothing.
-7. Not every key is valid for every service type — the schema is the arbiter.
-8. Project `envVariables` are inherited automatically; writing `FOO: ${FOO}` in a service
-   self-shadows and yields the literal string.
+2. Not every key is valid for every service type — the schema is the arbiter.
+3. **Re-importing is not an update path.** `service-import` against an existing hostname does not
+   edit the service. `override: true` works only for runtime services, and it *replaces* the
+   service and forces a redeploy. To change scaling, storage size or domains on a live service, use
+   the GUI or the REST API — see [`operations.md`](operations.md#changing-scaling-on-a-live-service).
