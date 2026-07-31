@@ -310,6 +310,24 @@ async function walkDir(root: string, ignorer: Ignorer | null): Promise<string[]>
  * `clean` delegates to `git archive HEAD`, which is the only way to get exactly the committed
  * tree without touching the working directory. Everything else is packed from disk.
  */
+/**
+ * Every directory the given paths live in, parents before children.
+ *
+ * Lexicographic order is enough for that guarantee: `a` always sorts before
+ * `a/b`, so a plain sort already emits an enclosing directory ahead of anything
+ * inside it — which is the order a sequential tar reader needs.
+ */
+export function ancestorDirectories(paths: readonly string[]): string[] {
+  const directories = new Set<string>();
+  for (const path of paths) {
+    const segments = path.split("/");
+    for (let i = 1; i < segments.length; i++) {
+      directories.add(segments.slice(0, i).join("/"));
+    }
+  }
+  return [...directories].sort();
+}
+
 export async function packArtifact(options: PackOptions): Promise<PackResult> {
   const { workingDir, out } = options;
   const dir = await mkdtemp(join(tmpdir(), "zz-pack-"));
@@ -410,13 +428,24 @@ export async function packArtifact(options: PackOptions): Promise<PackResult> {
 
     const sink = Bun.file(tarPath).writer();
     const writer = new TarWriter(sink);
+    // Directory entries are NOT optional here. The file listing carries only
+    // files, and the platform's unpacker does not create parents on its own —
+    // an archive without them fails during unpack with no build log at all,
+    // which is a very expensive way to learn this. `git archive` and `zcli`
+    // both emit them, so this matches what the receiving end already expects.
+    const directories = ancestorDirectories(paths);
+    for (const directory of directories) {
+      await writer.addFile({ sourcePath: join(workingDir, directory), archivePath: directory });
+    }
     for (const path of paths) {
       await writer.addFile({ sourcePath: join(workingDir, path), archivePath: path });
     }
     const byteSize = writer.finish();
     await sink.end();
 
-    out.debug(`packed ${paths.length} files (${byteSize} bytes uncompressed)`);
+    out.debug(
+      `packed ${paths.length} files in ${directories.length} directories (${byteSize} bytes uncompressed)`,
+    );
     return { tarPath, fileCount: paths.length, byteSize, cleanup };
   } catch (err) {
     await cleanup();

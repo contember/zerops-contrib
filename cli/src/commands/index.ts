@@ -13,11 +13,13 @@ import { processCommands } from "./process.ts";
 import { miscCommands } from "./misc.ts";
 import { apiCommands } from "./api.ts";
 import { catalogCommands } from "./catalog.ts";
+import { applyCommands } from "./apply.ts";
 
 export const COMMANDS: CommandSpec[] = [
   ...authCommands,
   ...projectCommands,
   ...projectEnvCommands,
+  ...applyCommands,
   ...serviceCommands,
   ...envCommands,
   ...deployCommands,

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, mkdir, writeFile, symlink, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { packArtifact, gzipStream, Ignorer } from "./archive.ts";
+import { packArtifact, gzipStream, Ignorer, ancestorDirectories } from "./archive.ts";
 import { Output } from "./output.ts";
 
 const out = new Output({ quiet: true });
@@ -37,7 +37,9 @@ describe("packArtifact", () => {
     });
 
     expect(result.fileCount).toBe(2);
-    expect(await listWithSystemTar(result.tarPath)).toEqual(["index.js", "src/app.ts"]);
+    // The directory entry is required: the platform's unpacker does not create
+    // parents, and an archive without it dies during unpack with no build log.
+    expect(await listWithSystemTar(result.tarPath)).toEqual(["index.js", "src/", "src/app.ts"]);
 
     const extractDir = await scratch();
     const proc = Bun.spawn(["tar", "-xzf", `${result.tarPath}.gz`, "-C", extractDir]);
@@ -93,7 +95,11 @@ describe("packArtifact", () => {
     });
 
     const listed = await listWithSystemTar(result.tarPath);
-    expect(listed).toEqual([veryDeep.split("\\").join("/")]);
+    const file = veryDeep.split("\\").join("/");
+    expect(listed).toContain(file);
+    // Long paths take the GNU long-name route for directories too.
+    expect(listed).toContain(`${deep.split("\\").join("/")}/`);
+    expect(listed.filter((entry) => !entry.endsWith("/"))).toEqual([file]);
 
     await result.cleanup();
     await rm(dir, { recursive: true, force: true });
@@ -190,5 +196,31 @@ describe("Ignorer", () => {
     const ig = new Ignorer(["*.log", "!keep.log"]);
     expect(ig.ignores("a.log", false)).toBe(true);
     expect(ig.ignores("keep.log", false)).toBe(false);
+  });
+});
+
+describe("ancestorDirectories", () => {
+  test("lists every parent, parents before children", () => {
+    expect(ancestorDirectories(["a/b/c.txt", "a/d.txt", "top.txt"])).toEqual([
+      "a",
+      "a/b",
+    ]);
+  });
+
+  test("emits an enclosing directory ahead of anything inside it", () => {
+    const ordered = ancestorDirectories([
+      "z/y/x/deep.txt",
+      "a/file.txt",
+      "z/other.txt",
+    ]);
+    for (const [index, directory] of ordered.entries()) {
+      const parent = directory.slice(0, directory.lastIndexOf("/"));
+      if (parent === "" || !ordered.includes(parent)) continue;
+      expect(ordered.indexOf(parent)).toBeLessThan(index);
+    }
+  });
+
+  test("has nothing to add for a flat listing", () => {
+    expect(ancestorDirectories(["a.txt", "b.txt"])).toEqual([]);
   });
 });

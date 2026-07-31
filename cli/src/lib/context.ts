@@ -169,11 +169,15 @@ export class Context {
       }
     }
     const clientId = await this.clientId();
-    const found = await this.api.call<{ items?: ProjectSummary[]; list?: ProjectSummary[] }>(
-      "GetClientProjectsByName",
-      { path: { id: clientId, name: ref } },
-    );
-    const items = found.items ?? found.list ?? [];
+    // This endpoint answers with `projects`, not the `items`/`list` envelope the
+    // rest of the API uses — reading only the latter made every name-based
+    // reference fail with "no project named …" while the project existed.
+    const found = await this.api.call<{
+      projects?: ProjectSummary[];
+      items?: ProjectSummary[];
+      list?: ProjectSummary[];
+    }>("GetClientProjectsByName", { path: { id: clientId, name: ref } });
+    const items = found.projects ?? found.items ?? found.list ?? [];
     if (items.length === 0) {
       throw notFound(`no project named '${ref}'`, "Run `zz project list` to see available projects.");
     }
