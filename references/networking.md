@@ -223,6 +223,12 @@ values are overwritten; `Forwarded` and `Proxy` headers are stripped):
 
 `X-Forwarded-For`, `X-Real-IP`, `X-Forwarded-Proto`, `X-Forwarded-Host`, `X-Forwarded-Port`.
 
+**Verified live, `X-Forwarded-Proto` did NOT reach a `bun@1.3.9` container** over a
+`.zerops.app` subdomain: an app trusting it still saw the internal `http` scheme, and a
+client-supplied value did not pass through either. `X-Real-IP` does arrive. Do not build an
+origin or scheme check on `X-Forwarded-Proto` here without testing it — have the deployment
+state its own public origin instead.
+
 Key defaults, adjustable under **Advanced balancer configuration**:
 
 | Parameter | Default | Range |

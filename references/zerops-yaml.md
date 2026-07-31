@@ -284,17 +284,22 @@ Both accept `httpGet` **or** `exec` — never both in the same block.
 deploy:
   readinessCheck:
     httpGet: { port: 3000, path: /health }
-    failureTimeout: 60   # seconds until the container is marked failed
-    retryPeriod: 10      # seconds between attempts
+    failureTimeout: 60s   # until the container is marked failed
+    retryPeriod: 10s      # between attempts
 
 run:
   healthCheck:
     httpGet: { port: 3000, path: /health, host: my-host.zerops, scheme: https }
-    failureTimeout: 30     # consecutive-failure seconds before restart (reset by success)
-    disconnectTimeout: 30  # seconds before removal from the load balancer
-    recoveryTimeout: 30    # seconds of success before traffic returns
-    execPeriod: 10         # seconds between attempts
+    failureTimeout: 30s     # consecutive-failure time before restart (reset by success)
+    disconnectTimeout: 30s  # before removal from the load balancer
+    recoveryTimeout: 30s    # of success before traffic returns
+    execPeriod: 10s         # between attempts
 ```
+
+**Every timeout here is a Go duration and must carry a unit.** A bare integer is
+rejected by validation — `cannot unmarshal !!int \`60\` into time.Duration` —
+and `zz validate -S <svc> --verbose` is the only place that message is visible.
+Verified live on `bun@1.3.9`.
 
 - **`httpGet`** — GET to `localhost:{port}{path}` from inside the container. Success = HTTP `2xx`
   (follows `3xx`). 5-second per-request timeout. `host` sets a Host header; `scheme: https` only if
