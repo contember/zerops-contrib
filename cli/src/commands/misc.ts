@@ -9,7 +9,6 @@ import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { CommandSpec } from "../lib/spec.ts";
-import { settleProcess } from "../lib/process.ts";
 import { usage } from "../lib/errors.ts";
 import type { ServiceSummary } from "../lib/context.ts";
 
@@ -187,23 +186,37 @@ a session and as the check after a deploy.`,
     },
   },
   {
-    path: ["cdn", "purge"],
-    summary: "Invalidate CDN cache for a domain path.",
+    path: ["schema"],
+    summary: "Print the JSON Schema for zerops.yaml or the import YAML.",
+    description: `The machine-readable contract behind both file formats, served by the platform itself and
+therefore always current. Two uses:
+
+  - point an editor at it (\`yaml.schemas\` in VS Code) to get completion and inline errors
+  - hand it to an agent that is about to write one of these files, instead of letting it guess
+
+\`zz validate\` remains the stronger check for zerops.yaml, because it also resolves the target
+service's type and version. The schema catches shape errors without a service.`,
     args: [
-      { name: "domain", description: "Domain whose cache should be purged.", required: true },
-      { name: "path", description: "Path or pattern to invalidate, e.g. /* or /images/.", required: false },
+      {
+        name: "kind",
+        description: "Which schema: 'zerops' for zerops.yaml, 'import' for the project import YAML.",
+        required: true,
+      },
     ],
-    examples: ["zz cdn purge example.com '/*'", "zz cdn purge example.com /images/"],
-    operations: ["PurgeStaticCdn"],
+    examples: [
+      "zz schema zerops > zerops-schema.json",
+      "zz schema import | jq '.properties.services'",
+    ],
+    operations: ["GetZeropsYamlJsonSchema", "GetImportProjectYamlJsonSchema"],
     async run(ctx, parsed) {
-      const domain = parsed.args[0]!;
-      const path = parsed.args[1] ?? "/*";
-      const projectId = await ctx.projectId();
-      if (ctx.dryRun) return { dryRun: true, operation: "PurgeStaticCdn", domain, path };
-      const proc = await ctx.api.call<{ id: string }>("PurgeStaticCdn", {
-        path: { id: projectId, domain, path },
-      });
-      ctx.out.data(await settleProcess(ctx, proc, `purging CDN cache for ${domain}${path}`));
+      const kind = parsed.args[0]!.toLowerCase();
+      const operation = { zerops: "GetZeropsYamlJsonSchema", import: "GetImportProjectYamlJsonSchema" }[kind];
+      if (!operation) {
+        throw usage(`unknown schema ${JSON.stringify(kind)}`, "Use 'zerops' or 'import'.");
+      }
+      const schema = await ctx.api.call<unknown>(operation);
+      // Always a document rather than a table: this is JSON meant to be piped, not read.
+      ctx.out.raw(typeof schema === "string" ? schema : JSON.stringify(schema, null, 2));
     },
   },
 ];

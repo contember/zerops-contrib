@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import type { CommandSpec } from "../lib/spec.ts";
 import { settleProcess } from "../lib/process.ts";
-import { EXIT, ZzError, notFound } from "../lib/errors.ts";
+import { EXIT, ZzError, notFound, usage } from "../lib/errors.ts";
 import { esFilter } from "../lib/extra-operations.ts";
 import type { ProjectSummary } from "../lib/context.ts";
 
@@ -188,6 +188,264 @@ Waits for the resulting processes unless --no-wait is given.`,
     },
   },
   {
+    path: ["project", "update"],
+    summary: "Rename a project, or change its description and tags.",
+    description: `The underlying endpoint is a full replacement, so this reads the project first and merges
+your changes into it — a field you do not pass keeps its current value rather than being
+cleared. \`--tag\` is the exception: passing it replaces the whole tag list.
+
+User roles are deliberately left alone; this command never touches who can access the project.`,
+    args: [{ name: "project", description: "Project name or id. Defaults to --project." }],
+    flags: [
+      { name: "name", type: "string", placeholder: "<name>", description: "New project name." },
+      { name: "description", type: "string", placeholder: "<text>", description: "New description. Pass an empty string to clear it." },
+      { name: "tag", type: "string[]", placeholder: "<tag>", description: "Tag to set. Repeatable, and replaces the existing list." },
+    ],
+    examples: [
+      "zz project update --name myapp-staging",
+      "zz project update myapp --tag prod --tag billing",
+    ],
+    operations: ["GetProjectDetails", "UpdateProject"],
+    async run(ctx, parsed) {
+      const project = parsed.args[0] ? await ctx.resolveProject(parsed.args[0]) : await ctx.project();
+      const touched = ["name", "description", "tag"].filter((f) => ctx.flags[f] !== undefined);
+      if (touched.length === 0) {
+        throw usage("nothing to change", "Pass at least one of --name, --description, --tag.");
+      }
+
+      const body = {
+        name: ctx.flag<string>("name") ?? project.name,
+        description: ctx.flag<string>("description") ?? (project.description ?? null),
+        tagList: ctx.flag<string[]>("tag") ?? (project.tagList ?? []),
+        // Re-sent unchanged: the endpoint defaults it to false, which would silently drop a
+        // shared public IPv4 from a project that has one.
+        publicIpV4Shared: project.publicIpV4Shared ?? false,
+      };
+
+      if (ctx.dryRun) return { dryRun: true, operation: "UpdateProject", projectId: project.id, changed: touched, body };
+      const updated = await ctx.api.call<ProjectSummary>("UpdateProject", { path: { id: project.id }, body });
+      ctx.out.step(`project ${updated.name} updated`);
+      ctx.out.data(updated);
+    },
+  },
+  {
+    path: ["project", "mode"],
+    summary: "Upgrade the project core from LIGHT to SERIOUS (highly available).",
+    description: `The core runs the internal DNS, the L7 balancer and the log collector. LIGHT runs one
+container of each; SERIOUS runs a redundant set and survives a node failure.
+
+This is an upgrade only — the platform does not downgrade a SERIOUS core back to LIGHT, so the
+cost increase is not reversible from here.`,
+    destructive: true,
+    args: [
+      { name: "mode", description: "Target core mode. Only SERIOUS is a valid upgrade target.", required: true },
+      { name: "project", description: "Project name or id. Defaults to --project." },
+    ],
+    examples: ["zz project mode SERIOUS --yes", "zz project mode SERIOUS myapp --dry-run"],
+    operations: ["PutProjectModeUpgrade"],
+    async run(ctx, parsed) {
+      const mode = parsed.args[0]!.toUpperCase();
+      if (mode !== "LIGHT" && mode !== "SERIOUS") {
+        throw usage(`unknown mode ${JSON.stringify(parsed.args[0])}`, "Use LIGHT or SERIOUS.");
+      }
+      const project = parsed.args[1] ? await ctx.resolveProject(parsed.args[1]) : await ctx.project();
+      await ctx.confirm(`upgrade the core of ${project.name} to ${mode} — this raises the running cost and cannot be undone`);
+      if (ctx.dryRun) return { dryRun: true, operation: "PutProjectModeUpgrade", projectId: project.id, mode };
+      const res = await ctx.api.call("PutProjectModeUpgrade", { path: { id: project.id }, body: { mode } });
+      ctx.out.data(await settleProcess(ctx, res, `upgrading ${project.name} to ${mode}`));
+    },
+  },
+  {
+    path: ["project", "ipv4", "request"],
+    summary: "Request a dedicated public IPv4 address for the project.",
+    description: `A dedicated address is billed and is what raw TCP/UDP port routing needs when the shared
+address is not enough. \`zz project get\` reports the assigned address once it is provisioned.`,
+    destructive: true,
+    args: [{ name: "project", description: "Project name or id. Defaults to --project." }],
+    operations: ["RequestIpv4"],
+    async run(ctx, parsed) {
+      const project = parsed.args[0] ? await ctx.resolveProject(parsed.args[0]) : await ctx.project();
+      await ctx.confirm(`request a billed dedicated IPv4 address for ${project.name}`);
+      if (ctx.dryRun) return { dryRun: true, operation: "RequestIpv4", projectId: project.id };
+      const res = await ctx.api.call("RequestIpv4", { path: { id: project.id } });
+      ctx.out.data(await settleProcess(ctx, res, `requesting an IPv4 address for ${project.name}`));
+    },
+  },
+  {
+    path: ["project", "ipv4", "shared"],
+    summary: "Turn the shared public IPv4 address on or off.",
+    description: "The shared address is free and carries HTTP traffic. Port routing on a shared address is limited to ports the platform assigns.",
+    args: [
+      { name: "state", description: "'on' or 'off'.", required: true },
+      { name: "project", description: "Project name or id. Defaults to --project." },
+    ],
+    examples: ["zz project ipv4 shared on", "zz project ipv4 shared off myapp"],
+    operations: ["PutProjectPublicIpV4Shared"],
+    async run(ctx, parsed) {
+      const state = parsed.args[0]!.toLowerCase();
+      if (state !== "on" && state !== "off") {
+        throw usage(`expected 'on' or 'off', got ${JSON.stringify(parsed.args[0])}`);
+      }
+      const project = parsed.args[1] ? await ctx.resolveProject(parsed.args[1]) : await ctx.project();
+      const enabled = state === "on";
+      if (ctx.dryRun) return { dryRun: true, operation: "PutProjectPublicIpV4Shared", projectId: project.id, enabled };
+      const updated = await ctx.api.call<ProjectSummary>("PutProjectPublicIpV4Shared", {
+        path: { id: project.id },
+        body: { enabled },
+      });
+      ctx.out.step(`shared IPv4 ${enabled ? "enabled" : "disabled"} for ${project.name}`);
+      ctx.out.data(updated);
+    },
+  },
+  {
+    path: ["project", "tags"],
+    summary: "List every project tag used in the organization.",
+    description: "The vocabulary `zz project update --tag` draws from, so a new project can be tagged consistently with the existing ones.",
+    examples: ["zz project tags -q"],
+    operations: ["ListProjectTags"],
+    async run(ctx) {
+      const clientId = await ctx.clientId();
+      const res = await ctx.api.call<{ items?: string[] }>("ListProjectTags", { path: { id: clientId } });
+      ctx.out.data(res.items ?? [], { emptyMessage: "no tags in use" });
+    },
+  },
+  {
+    path: ["project", "logging"],
+    summary: "Forward project logs to an external syslog endpoint.",
+    description: `Ships the project's combined log stream to your own collector. The syslog configuration is
+passed through verbatim, so the accepted syntax is the collector's, not Zerops'.
+
+Pass --type '' to stop forwarding.`,
+    flags: [
+      { name: "type", type: "string", required: true, placeholder: "<type>", description: "Forwarder type, e.g. syslog. An empty value disables forwarding." },
+      { name: "config", type: "string", placeholder: "<path>", description: "File holding the syslog configuration block." },
+      { name: "certificate", type: "string", placeholder: "<path>", description: "File holding the TLS certificate for the endpoint." },
+    ],
+    examples: ["zz project logging --type syslog --config ./syslog.conf"],
+    operations: ["ConfigureRemoteLogging"],
+    async run(ctx) {
+      const projectId = await ctx.projectId();
+      const configPath = ctx.flag<string>("config");
+      const certPath = ctx.flag<string>("certificate");
+      const body = {
+        type: ctx.flag<string>("type") || null,
+        syslogConfig: configPath ? await readFile(configPath, "utf8") : "",
+        certificate: certPath ? await readFile(certPath, "utf8") : "",
+      };
+      if (ctx.dryRun) return { dryRun: true, operation: "ConfigureRemoteLogging", projectId, body };
+      const res = await ctx.api.call("ConfigureRemoteLogging", { path: { id: projectId }, body });
+      ctx.out.data(await settleProcess(ctx, res, "configuring remote logging"));
+    },
+  },
+  {
+    path: ["project", "balancer", "get"],
+    summary: "Show the project's L7 HTTP balancer configuration.",
+    description: "The tunables applied to every routed domain in the project — timeouts, body size limits and the like.",
+    examples: ["zz project balancer get --json"],
+    operations: ["GetProjectL7httpbalancerConfig"],
+    async run(ctx) {
+      const projectId = await ctx.projectId();
+      const res = await ctx.api.call<{ values?: { name: string; value: string | null }[] }>(
+        "GetProjectL7httpbalancerConfig",
+        { path: { id: projectId } },
+      );
+      ctx.out.data(res.values ?? [], {
+        columns: [
+          { key: "name", header: "NAME" },
+          { key: "value", header: "VALUE" },
+        ],
+        quietField: "name",
+        emptyMessage: "no balancer configuration",
+      });
+    },
+  },
+  {
+    path: ["project", "balancer", "set"],
+    summary: "Change one or more L7 balancer settings.",
+    description: `Reads the current configuration and merges, so an unlisted setting is untouched. Run
+\`zz project balancer get\` first for the names this project accepts — they are the balancer's,
+not a fixed Zerops list.
+
+Pass \`name=\` with an empty value to reset one back to its default.`,
+    destructive: true,
+    args: [{ name: "assignment", description: "One or more name=value pairs.", required: true, variadic: true }],
+    examples: [
+      "zz project balancer set client_max_body_size=50m --yes",
+      "zz project balancer set proxy_read_timeout=120s proxy_send_timeout=120s --yes",
+    ],
+    operations: ["GetProjectL7httpbalancerConfig", "PutProjectL7httpbalancerConfig"],
+    async run(ctx, parsed) {
+      const projectId = await ctx.projectId();
+      const current = await ctx.api.call<{ values?: { name: string; value: string | null }[] }>(
+        "GetProjectL7httpbalancerConfig",
+        { path: { id: projectId } },
+      );
+
+      const merged = new Map((current.values ?? []).map((v) => [v.name, v.value]));
+      const changed: string[] = [];
+      for (const entry of parsed.args) {
+        const eq = entry.indexOf("=");
+        if (eq === -1) throw usage(`expected name=value, got ${JSON.stringify(entry)}`);
+        const name = entry.slice(0, eq);
+        const value = entry.slice(eq + 1);
+        merged.set(name, value === "" ? null : value);
+        changed.push(name);
+      }
+
+      const body = { values: [...merged].map(([name, value]) => ({ name, value })) };
+      await ctx.confirm(`change balancer settings (${changed.join(", ")}) for the whole project`);
+      if (ctx.dryRun) return { dryRun: true, operation: "PutProjectL7httpbalancerConfig", changed, body };
+      const res = await ctx.api.call("PutProjectL7httpbalancerConfig", { path: { id: projectId }, body });
+      ctx.out.data(await settleProcess(ctx, res, `applying balancer settings (${changed.join(", ")})`));
+    },
+  },
+  {
+    path: ["project", "prometheus"],
+    summary: "Point the project's Prometheus core at external scrape targets.",
+    description: `Only meaningful once the project has a Prometheus core stack. Each --target is a host:port
+Prometheus should scrape; --label attaches a label to all of them.
+
+For anything beyond one target group, pass a JSON file with --config-file holding the full
+\`configs\` array.`,
+    flags: [
+      { name: "target", type: "string[]", placeholder: "<host:port>", description: "Scrape target. Repeatable." },
+      { name: "label", type: "string[]", placeholder: "<key=value>", description: "Label applied to the targets. Repeatable." },
+      { name: "config-file", type: "string", placeholder: "<path>", description: "JSON file holding the full configs array, instead of --target/--label." },
+      { name: "instance", type: "string", placeholder: "<id>", description: "Core stack instance id, when the project has more than one." },
+    ],
+    examples: [
+      "zz project prometheus --target metrics.example.com:9090 --label env=prod",
+      "zz project prometheus --config-file ./scrape.json",
+    ],
+    operations: ["ConfigurePrometheus"],
+    async run(ctx) {
+      const projectId = await ctx.projectId();
+      const configFile = ctx.flag<string>("config-file");
+      const targets = ctx.flag<string[]>("target") ?? [];
+
+      let configs: unknown;
+      if (configFile) {
+        configs = JSON.parse(await readFile(configFile, "utf8"));
+      } else {
+        if (targets.length === 0) {
+          throw usage("nothing to configure", "Pass --target <host:port> at least once, or --config-file.");
+        }
+        const labels: Record<string, string> = {};
+        for (const entry of ctx.flag<string[]>("label") ?? []) {
+          const eq = entry.indexOf("=");
+          if (eq === -1) throw usage(`--label expects key=value, got ${JSON.stringify(entry)}`);
+          labels[entry.slice(0, eq)] = entry.slice(eq + 1);
+        }
+        configs = [{ targets, labels }];
+      }
+
+      const body = { configs, instanceId: ctx.flag<string>("instance") ?? null };
+      if (ctx.dryRun) return { dryRun: true, operation: "ConfigurePrometheus", projectId, body };
+      const res = await ctx.api.call("ConfigurePrometheus", { path: { id: projectId }, body });
+      ctx.out.data(await settleProcess(ctx, res, "configuring Prometheus scrape targets"));
+    },
+  },
+  {
     path: ["project", "service-import"],
     summary: "Add services to an existing project from an import YAML.",
     args: [{ name: "file", description: "Path to the services YAML, or '-' for stdin.", required: true }],
@@ -292,6 +550,28 @@ export const projectEnvCommands: CommandSpec[] = [
       if (ctx.dryRun) return { dryRun: true, operation: "DeleteProjectEnv", key };
       const proc = await ctx.api.call<{ id: string }>("DeleteProjectEnv", { path: { id: existing.id } });
       ctx.out.data(await settleProcess(ctx, proc, `deleting project variable ${key}`));
+    },
+  },
+  {
+    path: ["project", "env", "import"],
+    summary: "Replace the project's variables from a .env file.",
+    description: `A wholesale replacement, not a merge: keys absent from the file are removed. Export first
+with \`zz project env export\` if you mean to add to what is there.
+
+Services keep the old values until they are restarted — a variable write alone does not
+recreate running containers.`,
+    destructive: true,
+    args: [{ name: "file", description: "Path to a .env file, or '-' for stdin.", required: true }],
+    examples: ["zz project env import .env.production --yes", "cat .env | zz project env import - --yes"],
+    operations: ["UpdateProjectEnvFile"],
+    async run(ctx, parsed) {
+      const path = parsed.args[0]!;
+      const envFile = path === "-" ? await Bun.stdin.text() : await readFile(path, "utf8");
+      const projectId = await ctx.projectId();
+      await ctx.confirm(`replace every project variable from ${path}`);
+      if (ctx.dryRun) return { dryRun: true, operation: "UpdateProjectEnvFile", bytes: envFile.length };
+      const res = await ctx.api.call("UpdateProjectEnvFile", { path: { id: projectId }, body: { envFile } });
+      ctx.out.data(await settleProcess(ctx, res, "replacing project variables"));
     },
   },
   {

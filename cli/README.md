@@ -8,7 +8,8 @@ backups, environment writes, routing, rollback and deploy history have no comman
 you to the GUI. All of it is in the REST API, so all of it is here.
 
 ```
-228 documented operations + 17 undocumented · 100% reachable · 0 runtime dependencies
+228 documented operations + 17 undocumented · 100% reachable via `zz api`
+123 curated commands over the operations that deserve one · 0 runtime dependencies
 ```
 
 ## Install
@@ -103,10 +104,23 @@ zz env set LOG_LEVEL debug api --restart    # writes do not restart on their own
 zz env show db -q                           # every generated variable, keys only
 zz scale set api --min-containers 2 --max-containers 5
 zz backup create db --tag pre-migration
+
+zz service create db --type postgresql:ha@18   # one service, no import YAML
 zz route http create api.example.com api --port 3000
+zz route http get api.example.com           # why a domain does not serve: DNS + TLS state
+zz route http dns-check api.example.com     # re-check after fixing the A record
+zz cdn storage enable assets                # publish a bucket through the CDN
+
+zz repo connect acme/api api --branch main  # build on every push
+zz repo build api                           # build now, without a push
+zz pipeline trigger api --from-git https://github.com/acme/api@main
+
+zz token integration create ci --project-role myapp=BASIC_USER
+zz notification list --type ERROR           # what broke after the process finished
 
 zz catalog --search postgres                # valid type/version strings
 zz validate -S api                          # check zerops.yaml before pushing
+zz schema zerops > zerops-schema.json       # JSON Schema for editors and agents
 ```
 
 ## Escape hatch: `zz api`
@@ -176,6 +190,15 @@ command.
 
 **VPN.** `zcli vpn up` needs root, WireGuard and platform-specific DNS work, and it is orthogonal
 to the API. Keep using `zcli` for that one thing.
+
+**Account and billing.** Interactive login, 2FA and WebAuthn ceremonies, registration, password
+recovery, avatars, payment sources, invoices and the Stripe webhook. An agent has no business
+holding these, and most reject an access token anyway. Team membership and project role
+assignment are absent for the same reason — an integration token's scope is set when it is
+created (`zz token integration create --project-role`), which covers the automation case without
+handing the CLI the ability to reshape who can reach what.
+
+Everything named here is still reachable through `zz api` if you genuinely need it.
 
 ## Notes on the API worth knowing
 

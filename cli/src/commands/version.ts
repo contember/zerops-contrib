@@ -124,6 +124,46 @@ deploy" case.`,
     },
   },
   {
+    path: ["version", "rename"],
+    summary: "Give an app version a readable name.",
+    description: `Deploy history is otherwise identified by sequence number and id. Naming the versions that
+matter — a release tag, a known-good build — makes \`zz version rollback\` a decision rather
+than a guess.`,
+    args: [
+      { name: "app-version-id", description: "App version id.", required: true },
+      { name: "name", description: "Label to attach.", required: true },
+    ],
+    examples: ["zz version rename 3mKq8vNwQ1yTbXZs2LpAcd 'v1.4.0 — known good'"],
+    operations: ["updateAppVersion"],
+    async run(ctx, parsed) {
+      const [id, name] = [parsed.args[0]!, parsed.args[1]!];
+      if (ctx.dryRun) return { dryRun: true, operation: "updateAppVersion", appVersionId: id, name };
+      await ctx.api.call("updateAppVersion", { path: { id }, body: { name } });
+      ctx.out.step(`app version ${id} named "${name}"`);
+      return { appVersionId: id, name };
+    },
+  },
+  {
+    path: ["version", "download-url"],
+    summary: "Get a download URL for the code archive of an app version.",
+    description: `Returns a time-limited link to exactly what was deployed. The way to answer "what is actually
+running" when the repository has moved on, and to diff a working deploy against a broken one.
+
+The URL is a credential — anyone with it can download the application code until it expires.`,
+    args: [{ name: "app-version-id", description: "App version id.", required: true }],
+    examples: [
+      "zz version download-url 3mKq8vNwQ1yTbXZs2LpAcd -q",
+      "curl -sL \"$(zz version download-url 3mKq... -q)\" -o deployed.tar.gz",
+    ],
+    operations: ["getAppVersionAppCode"],
+    async run(ctx, parsed) {
+      const id = parsed.args[0]!;
+      const res = await ctx.api.call<{ url?: string }>("getAppVersionAppCode", { path: { id } });
+      ctx.out.warn("this URL grants access to the deployed application code until it expires");
+      ctx.out.data({ appVersionId: id, url: res.url ?? null }, { quietField: "url" });
+    },
+  },
+  {
     path: ["version", "cancel-build"],
     summary: "Cancel a running build.",
     destructive: true,
