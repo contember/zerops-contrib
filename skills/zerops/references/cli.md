@@ -9,10 +9,12 @@ Three tools, three places:
 - **`zcp`** — an MCP server scoped to **one project**, for coding agents. Covers most of what
   `zcli` cannot do (restart, scaling, env writes, events, verification). See
   [`zcp-mcp.md`](zcp-mcp.md).
-- **`zops`** — a from-scratch CLI in this repository (`cli/`) generated from the API's OpenAPI
+- **`zops`** — a from-scratch CLI **shipped with this plugin**, generated from the API's OpenAPI
   document, so all 228 documented operations are reachable, plus the 17 undocumented `/search`
   endpoints `zcli` uses internally. Designed for agents: `--json` everywhere, meaningful exit
-  codes, name-based addressing, waits for async operations. See [`zops-cli.md`](zops-cli.md).
+  codes, name-based addressing, waits for async operations. Run it as
+  `"$CLAUDE_PLUGIN_ROOT/bin/zops"`; nothing needs installing beyond Bun. See
+  [`zops-cli.md`](zops-cli.md).
 
 All four authenticate with the same personal access token. Only `zops` has a raw REST passthrough
 (`zops api`).

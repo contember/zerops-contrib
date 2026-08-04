@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { COMMANDS } from "./commands/index.ts";
-import { renderCommandHelp, renderRootHelp } from "./cli.ts";
+import { VERSION, renderCommandHelp, renderRootHelp } from "./cli.ts";
 import { GLOBAL_FLAGS } from "./lib/spec.ts";
 import { OPERATIONS, findOperation } from "./lib/operations.ts";
 import { ApiClient } from "./lib/http.ts";
@@ -206,5 +206,18 @@ describe("cli behaviour", () => {
     });
     expect(exitCode).not.toBe(0);
     expect(stderr).toMatch(/--yes|token|not authorized/i);
+  });
+});
+
+describe("version", () => {
+  // Three files carry the version and nothing derives one from another, so only a test keeps
+  // `zops --version` honest about which plugin release the user actually installed.
+  test("cli.ts, package.json and the plugin manifest agree", async () => {
+    const root = `${import.meta.dir}/../..`;
+    const pkg = await Bun.file(`${root}/cli/package.json`).json();
+    const plugin = await Bun.file(`${root}/.claude-plugin/plugin.json`).json();
+
+    expect(pkg.version).toBe(VERSION);
+    expect(plugin.version).toBe(VERSION);
   });
 });

@@ -5,11 +5,12 @@
 #   sync-docs.sh --check    report only, change no skill file; exits 1 on drift
 #
 # Version tables are machine-written from the upstream static/data.json into the
-# GENERATED block of references/service-catalog.md. Prose is not touched — the
-# script only tells you which upstream pages moved so you can review them.
+# GENERATED block of skills/zerops/references/service-catalog.md. Prose is not
+# touched — the script only tells you which upstream pages moved so you can
+# review them.
 #
-# Both modes clone/fetch the upstream repo into a cache outside the skill
-# (~/.cache/zerops-skill/docs, override with ZEROPS_DOCS_CACHE).
+# Both modes clone/fetch the upstream repo into a cache outside the repository
+# (~/.cache/zerops-contrib/docs, override with ZEROPS_DOCS_CACHE).
 #
 # Fails loudly rather than producing a quietly-wrong table: a renamed data.json
 # key, a service upstream added that this generator does not render, or a tracked
@@ -17,11 +18,12 @@
 
 set -euo pipefail
 
-SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-# Outside the skill on purpose: the upstream clone is ~120 MB and would otherwise
-# pollute greps of the skill and get zipped into any packaged artifact.
-CACHE_DIR="${ZEROPS_DOCS_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/zerops-skill/docs}"
-STATE_FILE="$SKILL_DIR/.docs-sync.json"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SKILL_DIR="$ROOT/skills/zerops"
+# Outside the repository on purpose: the upstream clone is ~120 MB and would
+# otherwise pollute greps of the skill and get zipped into any packaged artifact.
+CACHE_DIR="${ZEROPS_DOCS_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/zerops-contrib/docs}"
+STATE_FILE="$ROOT/.docs-sync.json"
 CATALOG="$SKILL_DIR/references/service-catalog.md"
 REPO="https://github.com/zeropsio/docs.git"
 
@@ -34,7 +36,8 @@ for bin in git python3; do
 done
 
 # Upstream pages this skill is derived from. If one of these changes, the prose
-# in the matching reference file may need a human pass.
+# in the matching reference file may need a human pass. Destinations are relative
+# to $SKILL_DIR.
 UPSTREAM_SOURCES=(
   "apps/docs/content/zerops-yaml/specification.mdx|references/zerops-yaml.md"
   "apps/docs/content/zerops-yaml/base-list.mdx|references/service-catalog.md"
@@ -354,7 +357,7 @@ else
       src="${entry%%|*}"
       dst="${entry##*|}"
       if grep -qxF "$src" <<<"$CHANGED"; then
-        printf '    %-62s -> %s\n' "$src" "$dst"
+        printf '    %-62s -> %s\n' "$src" "skills/zerops/$dst"
         HIT=1
       fi
     done

@@ -14,13 +14,24 @@ you to the GUI. All of it is in the REST API, so all of it is here.
 
 ## Install
 
+Nothing to install — `zops` ships inside the `zerops` Claude Code plugin and runs from this
+source tree. Bun is the only prerequisite, because the CLI uses `Bun.YAML`, `Bun.spawn`,
+`Bun.file` and `Bun.write`.
+
 ```sh
-bun install
-bun run generate          # regenerate the operation index from openapi.yml
-bun run build             # single binary at dist/zops
+"$CLAUDE_PLUGIN_ROOT/bin/zops" status    # from the plugin
+../bin/zops status                       # from a checkout
+bun src/index.ts status                  # directly
 ```
 
-Or run straight from source: `bun src/index.ts <command>`.
+It is not published to npm. To get a `zops` on `PATH` for interactive use, build the standalone
+binary:
+
+```sh
+bun install
+bun run build             # single binary at dist/zops, no Bun needed to run it
+cp dist/zops ~/.local/bin/
+```
 
 ## Authenticate
 

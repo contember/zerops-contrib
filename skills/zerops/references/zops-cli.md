@@ -1,6 +1,6 @@
 # `zops` — complete, agent-first CLI
 
-`zops` lives in [`cli/`](../cli) in this repository. It is generated from the Zerops OpenAPI
+`zops` ships with this plugin, in [`cli/`](../../../cli). It is generated from the Zerops OpenAPI
 document, so **all 228 public API operations are reachable** — including everything
 [`cli.md`](cli.md#what-zcli-cannot-do) lists as missing from `zcli`. 123 of them have a curated
 command; the rest are one `zops api` call away.
@@ -8,6 +8,18 @@ command; the rest are one `zops api` call away.
 **`zops --help` and `zops commands --json` are the source of truth for syntax.** This page is the
 operating contract: when to reach for it, what its output guarantees are, and the things its help
 text cannot tell you.
+
+## Running it
+
+There is nothing to install. Call the bundled wrapper, which runs the CLI from source with Bun:
+
+```sh
+"$CLAUDE_PLUGIN_ROOT/bin/zops" status
+```
+
+Every example below writes plain `zops` for readability. Use the wrapper path unless the user has
+put a `zops` of their own on `PATH` — the wrapper ignores one on purpose, so that the commands
+always match the documentation shipped beside them. If Bun is missing it says so and exits 1.
 
 ## When to use which tool
 

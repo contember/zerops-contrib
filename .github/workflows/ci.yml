@@ -1,0 +1,74 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  cli:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+        working-directory: cli
+      - run: bun run typecheck
+        working-directory: cli
+      - run: bun test
+        working-directory: cli
+
+      # The wrapper is what the skill actually calls, so a broken one breaks the plugin even
+      # when every test passes.
+      - run: ./bin/zops --version
+
+      - name: Build the standalone binary
+        run: bun run build
+        working-directory: cli
+
+  manifests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Manifests are valid JSON and name the plugin consistently
+        run: |
+          python3 - <<'PY'
+          import json, sys
+
+          plugin = json.load(open(".claude-plugin/plugin.json"))
+          market = json.load(open(".claude-plugin/marketplace.json"))
+          entries = [p for p in market["plugins"] if p["name"] == plugin["name"]]
+          if not entries:
+              sys.exit(f"marketplace.json has no entry for plugin {plugin['name']!r}")
+          if entries[0]["source"] != "./":
+              sys.exit("the marketplace entry must point at the repository root")
+          PY
+
+      - name: Every skill has frontmatter with a name and a description
+        run: |
+          python3 - <<'PY'
+          import pathlib, sys
+
+          for skill in sorted(pathlib.Path("skills").glob("*/SKILL.md")):
+              text = skill.read_text(encoding="utf-8")
+              if not text.startswith("---\n"):
+                  sys.exit(f"{skill}: missing YAML frontmatter")
+              front = text.split("---\n", 2)[1]
+              for key in ("name:", "description:"):
+                  if key not in front:
+                      sys.exit(f"{skill}: frontmatter has no {key[:-1]}")
+              print(f"ok {skill}")
+          PY
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Reports drift in the generated version tables without changing anything. Fails when
+      # upstream zeropsio/docs has moved and the tables were not regenerated.
+      - run: scripts/sync-docs.sh --check

@@ -41,6 +41,9 @@ like infrastructure-as-code, use `zops apply -f <import.yaml>`: it creates what 
 the fields the API can change in place, and reports the rest instead of pretending. See
 `references/zops-cli.md`.
 
+`zops` ships with this plugin — run it as `"$CLAUDE_PLUGIN_ROOT/bin/zops"`, which needs only Bun.
+Pages below write plain `zops` for readability.
+
 ## Minimal working example
 
 `zerops-import.yaml` — provision once:
@@ -128,11 +131,11 @@ Read only the file you need.
 | Hostnames, ports, subdomains, custom domains, L7 balancer, CDN, firewall and outbound ports, VPN, SSH and the web terminal, local development, 502 debugging | `references/networking.md` |
 | `zcli` commands and config; what `zcli` cannot do and the REST API; roles, project access and integration tokens; `zsc` in-container commands — run once across HA (`execOnce`), keep a container alive (`noop`), debug-mode control, temporary scaling, backups | `references/cli.md` |
 | The `zcp` MCP server: tools, remote vs local setup, `ZCP_API_KEY`, generating a local `.env`, the production boundary — and the day-2 operations it covers that `zcli` has no command for | `references/zcp-mcp.md` |
-| `zops`, the complete agent-first CLI in `cli/`: full API coverage, output contract and exit codes, waiting on async operations, `zops apply` for convergence, git-push builds, routing edits, CDN, access tokens, project and service configuration, the `zops api` passthrough, and the platform gotchas its help text cannot state | `references/zops-cli.md` |
+| `zops`, the complete agent-first CLI shipped with this plugin: how to invoke it, full API coverage, output contract and exit codes, waiting on async operations, `zops apply` for convergence, git-push builds, routing edits, CDN, access tokens, project and service configuration, the `zops api` passthrough, and the platform gotchas its help text cannot state | `references/zops-cli.md` |
 | Build phase, cache, runtime-prepare images, deploy strategy, readiness vs health checks, debug mode, CI/CD and repository integration, preview environments, diagnosing a failed build or deploy | `references/pipeline.md` |
 | Autoscaling and changing it on a live service, storage, backup and restore, HA migration, logging, observability, production checklist | `references/operations.md` |
 
-Version tables in `references/service-catalog.md` are generated — refresh with
+Version tables in `references/service-catalog.md` are generated — refresh with the repository's
 `scripts/sync-docs.sh` (`--check` to inspect drift first).
 
 ## Editor validation

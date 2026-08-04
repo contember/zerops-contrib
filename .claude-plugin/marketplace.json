@@ -1,0 +1,31 @@
+{
+  "$schema": "https://code.claude.com/schemas/marketplace.json",
+  "name": "zerops-contrib",
+  "owner": {
+    "name": "Contember",
+    "url": "https://github.com/contember"
+  },
+  "description": "Community tooling for the Zerops platform. Not affiliated with Zerops s.r.o.",
+  "plugins": [
+    {
+      "name": "zerops",
+      "source": "./",
+      "description": "Build, configure, deploy and operate applications on Zerops, with a CLI covering the whole public API.",
+      "author": {
+        "name": "Contember"
+      },
+      "repository": "https://github.com/contember/zerops-contrib",
+      "license": "MIT",
+      "category": "deployment",
+      "keywords": [
+        "zerops",
+        "paas",
+        "deployment",
+        "infrastructure",
+        "zerops.yaml",
+        "zcli",
+        "devops"
+      ]
+    }
+  ]
+}

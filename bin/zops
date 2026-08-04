@@ -1,0 +1,29 @@
+#!/bin/sh
+# zops — the entry point the skill calls as ${CLAUDE_PLUGIN_ROOT}/bin/zops.
+#
+# Always runs the copy bundled in cli/, from source, so the command surface matches the SKILL.md
+# shipped next to it. A zops already on PATH is deliberately ignored: an older global binary would
+# silently disagree with the documentation the agent is reading.
+#
+# Bun is the one prerequisite. The CLI uses Bun.YAML, Bun.spawn, Bun.file and Bun.write, none of
+# which plain Node has an equivalent for.
+
+set -e
+
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+
+# PATH first, then the default install location — Bun is not on PATH in a non-login shell.
+for candidate in bun "${BUN_INSTALL:-$HOME/.bun}/bin/bun"; do
+  if command -v "$candidate" >/dev/null 2>&1; then
+    exec "$candidate" "$root/cli/src/index.ts" "$@"
+  fi
+done
+
+cat >&2 <<EOF
+zops: bun not found.
+
+  curl -fsSL https://bun.sh/install | bash
+
+Already installed? Put it on PATH or set BUN_INSTALL to its prefix.
+EOF
+exit 1
