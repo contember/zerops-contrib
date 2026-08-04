@@ -1,0 +1,68 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # A tag that disagrees with the code would ship a binary reporting the wrong version, and
+      # `/plugin update` keys off plugin.json — so stop before anything is published.
+      - name: Tag matches the version in the manifests
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          plugin=$(python3 -c "import json; print(json.load(open('.claude-plugin/plugin.json'))['version'])")
+          if [ "$tag" != "$plugin" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match plugin.json version $plugin" >&2
+            exit 1
+          fi
+
+      - run: bun install --frozen-lockfile
+        working-directory: cli
+      - run: bun test
+        working-directory: cli
+
+      - name: Cross-compile every target
+        working-directory: cli
+        run: |
+          set -eu
+          mkdir -p ../dist
+          # Windows is absent on purpose: the CLI shells out to git and has never been run there.
+          # If an old CPU ever reports an illegal instruction, bun-linux-x64-baseline is the fix.
+          for target in linux-x64 linux-arm64 darwin-x64 darwin-arm64; do
+            echo "==> $target"
+            bun build --compile --minify --target="bun-$target" --outfile zops src/index.ts
+            tar -czf "../dist/zops-$target.tar.gz" zops
+            rm zops
+          done
+
+      - name: The linux-x64 build actually runs
+        run: |
+          set -eu
+          tar -xzf dist/zops-linux-x64.tar.gz -C /tmp
+          /tmp/zops --version
+          test "$(/tmp/zops commands --json | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["commands"]))')" -gt 100
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum *.tar.gz | tee SHA256SUMS
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            dist/zops-*.tar.gz dist/SHA256SUMS

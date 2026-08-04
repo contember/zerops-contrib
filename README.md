@@ -71,7 +71,16 @@ git clone https://github.com/contember/zerops-contrib
 ln -s "$PWD/zerops-contrib/skills/zerops" ~/.claude/skills/zerops
 ```
 
-**As a standalone binary**, for shells and CI that have no Bun:
+**As a standalone binary**, for shells and CI that have no Bun — checksum-verified, into
+`~/.local/bin`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/contember/zerops-contrib/main/scripts/install.sh | sh
+```
+
+`ZOPS_VERSION` pins a tag, `ZOPS_BIN_DIR` changes the destination. Builds are published for
+Linux and macOS on x64 and arm64; Windows is absent because the CLI shells out to `git` and has
+never been run there. To build one yourself:
 
 ```sh
 cd cli && bun install && bun run build     # dist/zops, self-contained

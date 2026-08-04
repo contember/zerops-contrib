@@ -10,7 +10,8 @@
 
 set -e
 
-root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+unset CDPATH
+root=$(cd -- "$(dirname -- "$0")/.." && pwd)
 
 # PATH first, then the default install location — Bun is not on PATH in a non-login shell.
 for candidate in bun "${BUN_INSTALL:-$HOME/.bun}/bin/bun"; do
