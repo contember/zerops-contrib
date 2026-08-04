@@ -2,7 +2,8 @@
 
 `zz` lives in [`cli/`](../cli) in this repository. It is generated from the Zerops OpenAPI
 document, so **all 228 public API operations are reachable** — including everything
-[`cli.md`](cli.md#what-zcli-cannot-do) lists as missing from `zcli`.
+[`cli.md`](cli.md#what-zcli-cannot-do) lists as missing from `zcli`. 123 of them have a curated
+command; the rest are one `zz api` call away.
 
 **`zz --help` and `zz commands --json` are the source of truth for syntax.** This page is the
 operating contract: when to reach for it, what its output guarantees are, and the things its help
@@ -14,6 +15,7 @@ text cannot tell you.
 |---|---|
 | Ship code (build + deploy) | `zz push` or `zcli push` — either works |
 | Restart, reload, scale, env writes, routing, rollback, backups, deploy history | **`zz`** — `zcli` has no command |
+| Git-push builds, CDN, tokens, project/service configuration | **`zz`** — `zcli` has no command |
 | Anything else in the API | `zz api <operationId>` |
 | Connect to the private network | `zcli vpn up` — `zz` deliberately omits VPN |
 | Inside a running container | `zsc` |
@@ -65,6 +67,10 @@ zz env set KEY value api --restart         # writes alone do NOT restart the ser
 zz scale set api --min-containers 2 --max-containers 5
 zz catalog --search postgres               # valid type/version strings, no guessing
 zz validate -S api                         # check zerops.yaml before spending a build
+zz service create db --type postgresql:ha@18   # one service without an import YAML
+zz route http get api.example.com          # DNS and certificate state for a domain
+zz repo connect acme/api api --branch main # build on every push instead of `zz push`
+zz notification list --type ERROR          # failures that happened after the process finished
 ```
 
 ## `zz apply` — the closest thing to declarative infrastructure
@@ -120,6 +126,23 @@ Deliberate limits, because the alternative is worse than drift:
 - **A project-scoped token cannot use the documented project listing**, but *can* use the
   undocumented `POST /project/search`, which applies per-project ACLs. `zz project list` falls
   back to it automatically — so it works where `zcli project list` returns 403.
+- **Organization-scoped commands need an organization-scoped token.** `zz token list`,
+  `zz token integration …`, `zz notification …` and `zz project tags` address the *client*, not a
+  project, and exit 3 under a project-scoped token. That is the token's shape, not a bug.
+- **`zz repo connect` needs an OAuth grant that only the GUI can obtain.** Without it the
+  integration registers and then never fires; `zz repo status` reports
+  `authorizationRequired: true`. Check with `zz repo list` before assuming a hook is live.
+- **Routing edits are staged, then synced.** Every `zz route` command syncs for you, but a change
+  made in the GUI or through `zz api` is not live until `zz route http sync` /
+  `zz route port sync`. `zz route … revert` throws staged changes away.
+- **Static CDN and storage CDN are different features.** `zz cdn purge` invalidates a routed
+  domain on the balancer; `zz cdn storage purge` invalidates objects in a bucket. Neither
+  affects the other.
+- **`zz service debug` sends both phases every time.** There is no endpoint to read the current
+  setting, so an omitted flag is written as `NONE` rather than left alone. A paused container is
+  billed while it waits.
+- **`zz project mode SERIOUS` is one-way.** The platform upgrades a LIGHT core to the HA one and
+  does not downgrade it back.
 
 ## Undocumented search endpoints
 

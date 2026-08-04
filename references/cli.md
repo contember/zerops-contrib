@@ -210,12 +210,20 @@ A large part of day-2 management has no `zcli` command. Do not invent one — re
 | Read appVersion status, build/deploy state | `zz version list/get` | GUI, or REST `/app-version` |
 | Configure domains, ports, firewall rules | `zz route http/port` | GUI, or REST `/public-http-routing`, `/public-port-routing` |
 | Backups — create, list, tag, retention, download | `zz backup …` | GUI → **Backups List & Configuration**, or REST. `zsc backup-create <stackName>` creates one from inside a container, untagged |
-| L7 balancer configuration | `zz api PutProjectL7httpbalancerConfig` | GUI → **Advanced balancer configuration** |
+| L7 balancer configuration | `zz project balancer get/set` | GUI → **Advanced balancer configuration** |
+| Build on push from GitHub/GitLab | `zz repo connect` | GUI → *Pipelines & CI/CD settings*. Needs an OAuth grant made in the GUI first |
+| Create one service without an import YAML | `zz service create` | GUI → **Add service**, or REST `/service-stack` |
+| Object-storage CDN — enable, disable, purge | `zz cdn storage …` | GUI → the bucket's CDN panel |
+| Access tokens — create, rotate, revoke | `zz token …` | GUI → Settings → **Access Token Management** |
+| Upgrade the project core to HA | `zz project mode SERIOUS` | GUI → project settings. One-way |
+| Dedicated / shared public IPv4 | `zz project ipv4 …` | GUI → project settings |
+| Remote log forwarding, Prometheus scrape targets | `zz project logging`, `zz project prometheus` | GUI → project settings |
+| Pause a build for inspection over SSH | `zz service debug` | GUI → *Pipelines & CI/CD settings* |
+| Platform notifications | `zz notification list` | GUI → the bell |
 
-Every row is reachable from `zz`, because it wraps the REST API rather than a curated subset; the
-last row has no dedicated command but is one `zz api` call away. Restoring a backup is still
-GUI-only — the API exposes creation, tagging, retention and a download URL, but no restore
-endpoint.
+Every row is reachable from `zz`, because it wraps the REST API rather than a curated subset.
+Restoring a backup is still GUI-only — the API exposes creation, tagging, retention and a
+download URL, but no restore endpoint.
 
 ### REST API
 
