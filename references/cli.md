@@ -281,7 +281,10 @@ environment variables come back as `REDACTED`.
 
 ### Integration tokens
 
-Created at GUI → Settings → **Access Token Management**. Three shapes:
+Created at GUI → Settings → **Access Token Management**, or headlessly with
+`zz token integration create <name> --project-role <project>=<ROLE>` (see
+[`zz-cli.md`](zz-cli.md)) — which needs an organization-scoped token itself, so it bootstraps
+per-project tokens rather than replacing the first one. Three shapes:
 
 | Shape | Reach |
 |---|---|

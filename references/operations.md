@@ -250,7 +250,8 @@ services:
 - Disconnect from all services before stopping or deleting the storage service.
 
 Connect in the GUI (*Shared storage connections*), via `mount:` in the import YAML (requires
-`buildFromGit`), or with `zsc shared-storage mount|unmount|wait <name>`.
+`buildFromGit`), with `zsc shared-storage mount|unmount|wait <name>` from inside a container, or
+from outside with `zz service shared-storage connect <storage> <service>` (and `disconnect`).
 
 ## Backups
 
@@ -348,6 +349,11 @@ Forwarding is available to Better Stack, Papertrail, and self-hosted ELK. Zerops
 **UDP syslog** — a self-hosted Logstash must listen on UDP. In a custom `syslog-ng` config use the
 source name `s_src` (not `s_sys`); system certificates live at `/etc/ssl/certs`.
 
+Configured in the GUI, or headlessly with
+`zz project logging --type syslog --config ./syslog.conf [--certificate ./ca.pem]`. The config
+block is passed through verbatim, so its syntax is the collector's, not Zerops'. `--type ''`
+stops forwarding.
+
 ## Metrics and observability
 
 Built-in: **GUI → Service containers & Overview** for CPU/RAM/disk history, container count and
@@ -379,6 +385,10 @@ value:
 2. Set `ZEROPS_PROMETHEUS_PORT` on the service — `9090`, or `9090,9091` for several ports.
 
 Managed services expose their own exporters on this variable too (e.g. Valkey at `db:9121`).
+
+To scrape something *outside* the project, point the Prometheus core at it explicitly:
+`zz project prometheus --target metrics.example.com:9090 --label env=prod`, or
+`--config-file <json>` for more than one target group.
 
 Some PostgreSQL dashboards need `CREATE EXTENSION IF NOT EXISTS pg_stat_statements;` as superuser
 followed by a service restart.

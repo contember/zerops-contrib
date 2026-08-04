@@ -17,10 +17,12 @@
 
 | Method | How |
 |---|---|
-| Continuous deployment | Connect a GitHub/GitLab repo in *Pipelines & CI/CD settings*. Trigger on push to a branch or on a new tag (optional regex filter). |
-| On demand, CLI | `zcli service push` (build + deploy) or `zcli service deploy` (deploy only) |
+| Continuous deployment | Connect a GitHub/GitLab repo in *Pipelines & CI/CD settings*, or `zz repo connect <owner/name> <service> --branch main`. Trigger on push to a branch or on a new tag (optional regex filter). |
+| On demand, CLI | `zcli service push` / `zz push` (build + deploy), or `zcli service deploy` / `zz deploy` (deploy only) |
+| On demand, from the connected repo | `zz repo build <service>` — rebuilds the repository head without a push |
 | On demand, GUI | *Pipelines & CI/CD settings* → **Re-deploy last pipeline** or **Trigger new pipeline** |
 | One-time at import | `buildFromGit: <public-repo-url>` in the import YAML |
+| Any Git URL, no webhook | `zz pipeline trigger <service> --from-git <url>` — the same mechanism as `buildFromGit`, on demand |
 
 Add `[ci skip]` or `[skip ci]` (with brackets, case-insensitive) to a commit message to suppress a
 webhook build.
@@ -182,6 +184,21 @@ The repo needs a valid `zerops.yaml` in its root before this works. Zerops takes
 access in order to manage the webhook and pull code, and does not store your source beyond that.
 Disconnect with **Stop automatic build trigger**, which removes the webhook and the integration
 config.
+
+Headless equivalents (`references/zz-cli.md`):
+
+```sh
+zz repo list                                        # also an authorization check
+zz repo connect acme/api api --branch main
+zz repo connect acme/api api --tag-regex '^v[0-9]'  # the production-grade trigger
+zz repo status api                                  # what is connected, and whether it can fire
+zz repo disable api --yes                           # stop building on push, keep the config
+```
+
+**The OAuth grant is still GUI-only.** `zz repo connect` registers the integration but cannot
+authorize Zerops against the forge, so on a fresh account the hook is created and then never
+fires — `zz repo status` reports `authorizationRequired: true`. Authorize once in the GUI, and
+every later connection is scriptable.
 
 `[ci skip]` / `[skip ci]` in a commit message (with brackets, case-insensitive) suppresses the
 build. The webhook still fires and shows as delivered in GitHub — it just does nothing.

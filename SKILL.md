@@ -128,7 +128,7 @@ Read only the file you need.
 | Hostnames, ports, subdomains, custom domains, L7 balancer, CDN, firewall and outbound ports, VPN, SSH and the web terminal, local development, 502 debugging | `references/networking.md` |
 | `zcli` commands and config; what `zcli` cannot do and the REST API; roles, project access and integration tokens; `zsc` in-container commands — run once across HA (`execOnce`), keep a container alive (`noop`), debug-mode control, temporary scaling, backups | `references/cli.md` |
 | The `zcp` MCP server: tools, remote vs local setup, `ZCP_API_KEY`, generating a local `.env`, the production boundary — and the day-2 operations it covers that `zcli` has no command for | `references/zcp-mcp.md` |
-| `zz`, the complete agent-first CLI in `cli/`: full API coverage, output contract and exit codes, waiting on async operations, the `zz api` passthrough, and the platform gotchas its help text cannot state | `references/zz-cli.md` |
+| `zz`, the complete agent-first CLI in `cli/`: full API coverage, output contract and exit codes, waiting on async operations, `zz apply` for convergence, git-push builds, routing edits, CDN, access tokens, project and service configuration, the `zz api` passthrough, and the platform gotchas its help text cannot state | `references/zz-cli.md` |
 | Build phase, cache, runtime-prepare images, deploy strategy, readiness vs health checks, debug mode, CI/CD and repository integration, preview environments, diagnosing a failed build or deploy | `references/pipeline.md` |
 | Autoscaling and changing it on a live service, storage, backup and restore, HA migration, logging, observability, production checklist | `references/operations.md` |
 
@@ -141,6 +141,11 @@ Both files have official JSON Schemas, auto-applied via SchemaStore when named
 `zerops.yaml` / `zerops.yml` and `zerops-import.yaml` / `zerops-*-import.yaml`. URLs and the
 modeline for non-standard filenames are in `references/zerops-yaml.md` and
 `references/import-yaml.md`. Prefer schema validation in the editor over guessing key names.
+
+`zz schema zerops` and `zz schema import` print the same schemas from the live API, which is the
+way to read one before writing either file rather than guessing. For `zerops.yaml`,
+`zz validate -S <service>` is the stronger check — it also resolves the target service's type and
+version, which a schema cannot.
 
 ## Verification loop
 
