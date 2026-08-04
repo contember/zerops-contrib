@@ -97,6 +97,10 @@ bun run typecheck
 bun run generate    # rebuild the operation index after replacing openapi.yml
 ```
 
+Releasing means bumping the version in three places — `.claude-plugin/plugin.json`,
+`cli/package.json` and `VERSION` in `cli/src/cli.ts`. None derives from another, so a test fails
+when they drift; `/plugin update` keys off the first one.
+
 The service version tables in `skills/zerops/references/service-catalog.md` are machine-written
 from [zeropsio/docs](https://github.com/zeropsio/docs):
 
