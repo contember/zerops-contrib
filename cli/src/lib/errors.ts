@@ -3,7 +3,7 @@
  *
  * Agents branch on exit codes rather than parsing prose, so the codes carry the retry decision:
  * anything `retriable` is worth backing off and repeating, everything else needs a different
- * request. Every failure path in the CLI funnels through `ZzError` so `--json` consumers only
+ * request. Every failure path in the CLI funnels through `ZopsError` so `--json` consumers only
  * ever need one parser.
  */
 
@@ -42,7 +42,7 @@ export const EXIT_MEANINGS: Record<number, string> = {
   8: "remote operation finished in a failed state",
 };
 
-export interface ZzErrorInit {
+export interface ZopsErrorInit {
   code: string;
   message: string;
   exitCode?: ExitCode;
@@ -52,15 +52,15 @@ export interface ZzErrorInit {
   details?: Record<string, unknown>;
 }
 
-export class ZzError extends Error {
+export class ZopsError extends Error {
   readonly code: string;
   readonly exitCode: ExitCode;
   readonly hint?: string;
   readonly details?: Record<string, unknown>;
 
-  constructor(init: ZzErrorInit) {
+  constructor(init: ZopsErrorInit) {
     super(init.message);
-    this.name = "ZzError";
+    this.name = "ZopsError";
     this.code = init.code;
     this.exitCode = init.exitCode ?? EXIT.ERROR;
     this.hint = init.hint;
@@ -87,16 +87,16 @@ export class ZzError extends Error {
 }
 
 export const usage = (message: string, hint?: string) =>
-  new ZzError({ code: "usage", message, exitCode: EXIT.USAGE, hint });
+  new ZopsError({ code: "usage", message, exitCode: EXIT.USAGE, hint });
 
 export const notFound = (message: string, hint?: string) =>
-  new ZzError({ code: "notFound", message, exitCode: EXIT.NOT_FOUND, hint });
+  new ZopsError({ code: "notFound", message, exitCode: EXIT.NOT_FOUND, hint });
 
 export const authError = (message: string, hint?: string) =>
-  new ZzError({ code: "unauthorized", message, exitCode: EXIT.AUTH, hint });
+  new ZopsError({ code: "unauthorized", message, exitCode: EXIT.AUTH, hint });
 
 export const timeout = (message: string, details?: Record<string, unknown>) =>
-  new ZzError({ code: "timeout", message, exitCode: EXIT.TIMEOUT, details });
+  new ZopsError({ code: "timeout", message, exitCode: EXIT.TIMEOUT, details });
 
 export const remoteFailed = (message: string, details?: Record<string, unknown>) =>
-  new ZzError({ code: "remoteOperationFailed", message, exitCode: EXIT.REMOTE_FAILED, details });
+  new ZopsError({ code: "remoteOperationFailed", message, exitCode: EXIT.REMOTE_FAILED, details });

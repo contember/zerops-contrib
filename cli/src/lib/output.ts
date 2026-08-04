@@ -2,11 +2,11 @@
  * The output contract.
  *
  * stdout carries data and nothing else — every diagnostic, progress line and warning goes to
- * stderr, so `zz service list --json | jq` can never be corrupted by a status message. Errors
+ * stderr, so `zops service list --json | jq` can never be corrupted by a status message. Errors
  * are diagnostics too and therefore also land on stderr, which keeps stdout parseable even on
  * the failure path.
  */
-import type { ZzError } from "./errors.ts";
+import type { ZopsError } from "./errors.ts";
 
 export interface Column<T> {
   key: string;
@@ -82,7 +82,7 @@ export class Output {
     process.stderr.write(line.endsWith("\n") ? line : `${line}\n`);
   }
 
-  fail(err: ZzError): void {
+  fail(err: ZopsError): void {
     if (this.json) {
       process.stderr.write(`${JSON.stringify(err.toJSON())}\n`);
       return;

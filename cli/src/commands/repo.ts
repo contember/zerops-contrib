@@ -4,7 +4,7 @@
  * Two different things live here and are easy to confuse. An *integration* is a persistent
  * webhook: Zerops watches a branch or tag pattern on GitHub/GitLab and builds on every push.
  * A *pipeline trigger* is a one-shot build of whatever the service is already pointed at, or of
- * a repository URL passed inline. `zz push` is neither — that uploads the working tree.
+ * a repository URL passed inline. `zops push` is neither — that uploads the working tree.
  *
  * Connecting an integration needs the account's OAuth grant for the provider, which only the
  * GUI can obtain. `authorizationRequired` in the status is how that shows up.
@@ -77,7 +77,7 @@ account still needs to authorize Zerops against the forge.
 \`authorizationRequired: true\` means the integration exists but cannot fire — grant access in
 the Zerops GUI (Settings → Account access) and it starts working without reconfiguration.`,
     args: [{ name: "service", description: "Service hostname or id. Defaults to --service." }],
-    examples: ["zz repo status api", "zz repo status api --json"],
+    examples: ["zops repo status api", "zops repo status api --json"],
     operations: ["GetExternalRepositoryIntegrationStatus"],
     async run(ctx, parsed) {
       const service = await ctx.service(parsed.args[0]);
@@ -111,7 +111,7 @@ the Zerops GUI (Settings → Account access) and it starts working without recon
 head. Pass exactly one of --branch or --tag-regex: a branch integration fires on every push to
 that branch, a tag integration on every tag matching the pattern.
 
-The forge account must already be authorized — run \`zz repo list\` first; an empty list with an
+The forge account must already be authorized — run \`zops repo list\` first; an empty list with an
 auth error means the grant is missing and has to be made in the GUI.`,
     args: [
       { name: "repository", description: "Repository in owner/name form, e.g. acme/api.", required: true },
@@ -126,9 +126,9 @@ auth error means the grant is missing and has to be made in the GUI.`,
       { name: "inactive", type: "boolean", description: "Register the hook but leave it disabled." },
     ],
     examples: [
-      "zz repo connect acme/api api --branch main",
-      "zz repo connect acme/api api --tag-regex '^v[0-9]' --setup api",
-      "zz repo connect acme/api api --branch main --no-build",
+      "zops repo connect acme/api api --branch main",
+      "zops repo connect acme/api api --tag-regex '^v[0-9]' --setup api",
+      "zops repo connect acme/api api --branch main --no-build",
     ],
     operations: ["SetupExternalRepositoryIntegration"],
     async run(ctx, parsed) {
@@ -168,10 +168,10 @@ auth error means the grant is missing and has to be made in the GUI.`,
   {
     path: ["repo", "disable"],
     summary: "Stop building on push without discarding the integration.",
-    description: "Re-sends the existing configuration with the hook deactivated. `zz repo connect` re-enables it.",
+    description: "Re-sends the existing configuration with the hook deactivated. `zops repo connect` re-enables it.",
     destructive: true,
     args: [{ name: "service", description: "Service hostname or id. Defaults to --service." }],
-    examples: ["zz repo disable api --yes"],
+    examples: ["zops repo disable api --yes"],
     operations: ["GetExternalRepositoryIntegrationStatus", "SetupExternalRepositoryIntegration"],
     async run(ctx, parsed) {
       const service = await ctx.service(parsed.args[0]);
@@ -179,7 +179,7 @@ auth error means the grant is missing and has to be made in the GUI.`,
         path: { id: service.id },
       });
       const current = currentIntegration(status);
-      if (!current) throw notFound(`${service.name} has no Git integration`, "Run `zz repo status`.");
+      if (!current) throw notFound(`${service.name} has no Git integration`, "Run `zops repo status`.");
       if (!current.integration.isActive) {
         ctx.out.info(`${service.name} already has the integration disabled`);
         ctx.out.data({ service: service.name, active: false, changed: false });
@@ -214,7 +214,7 @@ made before the integration existed.`,
     flags: [
       { name: "env-file", type: "string", placeholder: "<path>", description: "Build-time variables in .env format, applied to this build only." },
     ],
-    examples: ["zz repo build api", "zz repo build api --no-wait"],
+    examples: ["zops repo build api", "zops repo build api --no-wait"],
     operations: ["TriggerExternalRepositoryIntegration"],
     async run(ctx, parsed) {
       const service = await ctx.service(parsed.args[0]);
@@ -236,9 +236,9 @@ made before the integration existed.`,
     path: ["repo", "list"],
     summary: "List repositories the linked forge account can reach.",
     description: `Reads the OAuth grant, so it doubles as an authorization check: an auth error here means
-Zerops has no access to the forge and \`zz repo connect\` will not work yet.`,
+Zerops has no access to the forge and \`zops repo connect\` will not work yet.`,
     flags: [PROVIDER_FLAG, { name: "search", type: "string", placeholder: "<substring>", description: "Only repositories whose full name contains this." }],
-    examples: ["zz repo list", "zz repo list --provider gitlab -q"],
+    examples: ["zops repo list", "zops repo list --provider gitlab -q"],
     operations: ["getGithubRepositories", "getGitlabRepositories"],
     async run(ctx) {
       const target = provider(ctx);
@@ -265,7 +265,7 @@ Zerops has no access to the forge and \`zz repo connect\` will not work yet.`,
     summary: "List branches of a repository on the linked forge account.",
     args: [{ name: "repository", description: "Repository in owner/name form.", required: true }],
     flags: [PROVIDER_FLAG],
-    examples: ["zz repo branches acme/api", "zz repo branches acme/api -q"],
+    examples: ["zops repo branches acme/api", "zops repo branches acme/api -q"],
     operations: ["getGithubRepositoryBranches", "getGitlabRepositoryBranches"],
     async run(ctx, parsed) {
       const operation =
@@ -289,7 +289,7 @@ export const pipelineCommands: CommandSpec[] = [
   {
     path: ["pipeline", "trigger"],
     summary: "Run a build/deploy pipeline for a service, optionally from a public Git URL.",
-    description: `The general-purpose pipeline entry point behind \`zz push\` and \`zz repo build\`. Reach for it
+    description: `The general-purpose pipeline entry point behind \`zops push\` and \`zops repo build\`. Reach for it
 when neither fits:
 
   --from-git   build from any Git URL, with no webhook and no forge authorization. This is the
@@ -309,9 +309,9 @@ Supplying --zerops-yaml overrides the configuration in the repository for this r
       { name: "start-without-code", type: "boolean", description: "Start the service with no application code." },
     ],
     examples: [
-      "zz pipeline trigger api --from-git https://github.com/acme/api@main",
-      "zz pipeline trigger api --app-version 3mKq8vNwQ1yTbXZs2LpAcd",
-      "zz pipeline trigger worker --start-without-code",
+      "zops pipeline trigger api --from-git https://github.com/acme/api@main",
+      "zops pipeline trigger api --app-version 3mKq8vNwQ1yTbXZs2LpAcd",
+      "zops pipeline trigger worker --start-without-code",
     ],
     operations: ["PutTriggerPipeline"],
     async run(ctx, parsed) {
@@ -333,7 +333,7 @@ Supplying --zerops-yaml overrides the configuration in the repository for this r
       if (Object.keys(body).length === 0) {
         throw usage(
           "nothing to trigger",
-          "Pass --from-git, --app-version or --start-without-code. To deploy the working tree, use `zz push`.",
+          "Pass --from-git, --app-version or --start-without-code. To deploy the working tree, use `zops push`.",
         );
       }
 

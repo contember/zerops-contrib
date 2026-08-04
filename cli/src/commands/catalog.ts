@@ -1,5 +1,5 @@
 /**
- * Self-description: `zz commands` dumps the entire command surface as data.
+ * Self-description: `zops commands` dumps the entire command surface as data.
  *
  * An agent can enumerate what this CLI can do in one call, without scraping help text or
  * shipping a copy of the manual that goes stale.
@@ -21,9 +21,9 @@ agents and wrappers that want to enumerate the surface rather than parse --help.
       { name: "search", type: "string", placeholder: "<substring>", description: "Only commands matching this substring." },
     ],
     examples: [
-      "zz commands --json",
-      "zz commands --json | jq -r '.commands[].name'",
-      "zz commands --search backup",
+      "zops commands --json",
+      "zops commands --json | jq -r '.commands[].name'",
+      "zops commands --search backup",
     ],
     operations: [],
     async run(ctx) {
@@ -67,7 +67,7 @@ agents and wrappers that want to enumerate the surface rather than parse --help.
       }
 
       ctx.out.data({
-        tool: "zz",
+        tool: "zops",
         version: VERSION,
         apiSpecVersion: SPEC_VERSION,
         rawOperationCount: DOCUMENTED_COUNT + UNDOCUMENTED_COUNT,

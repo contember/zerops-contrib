@@ -1,6 +1,6 @@
 ---
 name: zerops
-description: Build, configure, deploy and operate applications on Zerops (zerops.io) — a bare-metal PaaS. Covers `zerops.yaml` (build/run pipeline, in the repo) and the project/service import YAML, the service catalog and version strings, environment variables and cross-service references, networking and CDN, `zcli`/`zsc`/`zcp`/`zz`, roles and access tokens, autoscaling, storage, backups and the deploy lifecycle. Use whenever the user mentions Zerops, zerops.yaml / zerops.yml, zerops-import.yaml, zcli, zsc, zcp, zz, ZCP_API_KEY, `.zerops.app` subdomains, `buildFromGit`, `deployFiles`, `envSecrets`, `yamlPreprocessor`, `zeropsSubdomainHost`, service types like `postgresql:ha@18` / `php-nginx@8.4` / `object-storage`; whenever the working repository contains a `zerops.yaml`, `zerops.yml`, `zerops-import.yaml` or a `.mcp.json` with a Zerops MCP server; or when asked to deploy, provision, scale, roll back, or debug an app on Zerops.
+description: Build, configure, deploy and operate applications on Zerops (zerops.io) — a bare-metal PaaS. Covers `zerops.yaml` (build/run pipeline, in the repo) and the project/service import YAML, the service catalog and version strings, environment variables and cross-service references, networking and CDN, `zcli`/`zsc`/`zcp`/`zops`, roles and access tokens, autoscaling, storage, backups and the deploy lifecycle. Use whenever the user mentions Zerops, zerops.yaml / zerops.yml, zerops-import.yaml, zcli, zsc, zcp, zops, ZCP_API_KEY, `.zerops.app` subdomains, `buildFromGit`, `deployFiles`, `envSecrets`, `yamlPreprocessor`, `zeropsSubdomainHost`, service types like `postgresql:ha@18` / `php-nginx@8.4` / `object-storage`; whenever the working repository contains a `zerops.yaml`, `zerops.yml`, `zerops-import.yaml` or a `.mcp.json` with a Zerops MCP server; or when asked to deploy, provision, scale, roll back, or debug an app on Zerops.
 ---
 
 # Zerops
@@ -37,9 +37,9 @@ Runtime services (nodejs, php, go, …) are built from your repo by the pipeline
 **Import is create-only.** Re-importing a file updates nothing, and `override: true` *replaces* a
 runtime service and forces a redeploy — so a committed import YAML is a bootstrap script, not a
 declaration of state, and it drifts from the first GUI change onwards. Where you want it to behave
-like infrastructure-as-code, use `zz apply -f <import.yaml>`: it creates what is missing, converges
+like infrastructure-as-code, use `zops apply -f <import.yaml>`: it creates what is missing, converges
 the fields the API can change in place, and reports the rest instead of pretending. See
-`references/zz-cli.md`.
+`references/zops-cli.md`.
 
 ## Minimal working example
 
@@ -128,7 +128,7 @@ Read only the file you need.
 | Hostnames, ports, subdomains, custom domains, L7 balancer, CDN, firewall and outbound ports, VPN, SSH and the web terminal, local development, 502 debugging | `references/networking.md` |
 | `zcli` commands and config; what `zcli` cannot do and the REST API; roles, project access and integration tokens; `zsc` in-container commands — run once across HA (`execOnce`), keep a container alive (`noop`), debug-mode control, temporary scaling, backups | `references/cli.md` |
 | The `zcp` MCP server: tools, remote vs local setup, `ZCP_API_KEY`, generating a local `.env`, the production boundary — and the day-2 operations it covers that `zcli` has no command for | `references/zcp-mcp.md` |
-| `zz`, the complete agent-first CLI in `cli/`: full API coverage, output contract and exit codes, waiting on async operations, `zz apply` for convergence, git-push builds, routing edits, CDN, access tokens, project and service configuration, the `zz api` passthrough, and the platform gotchas its help text cannot state | `references/zz-cli.md` |
+| `zops`, the complete agent-first CLI in `cli/`: full API coverage, output contract and exit codes, waiting on async operations, `zops apply` for convergence, git-push builds, routing edits, CDN, access tokens, project and service configuration, the `zops api` passthrough, and the platform gotchas its help text cannot state | `references/zops-cli.md` |
 | Build phase, cache, runtime-prepare images, deploy strategy, readiness vs health checks, debug mode, CI/CD and repository integration, preview environments, diagnosing a failed build or deploy | `references/pipeline.md` |
 | Autoscaling and changing it on a live service, storage, backup and restore, HA migration, logging, observability, production checklist | `references/operations.md` |
 
@@ -142,9 +142,9 @@ Both files have official JSON Schemas, auto-applied via SchemaStore when named
 modeline for non-standard filenames are in `references/zerops-yaml.md` and
 `references/import-yaml.md`. Prefer schema validation in the editor over guessing key names.
 
-`zz schema zerops` and `zz schema import` print the same schemas from the live API, which is the
+`zops schema zerops` and `zops schema import` print the same schemas from the live API, which is the
 way to read one before writing either file rather than guessing. For `zerops.yaml`,
-`zz validate -S <service>` is the stronger check — it also resolves the target service's type and
+`zops validate -S <service>` is the stronger check — it also resolves the target service's type and
 version, which a schema cannot.
 
 ## Verification loop
@@ -158,14 +158,14 @@ zcli service log -S <service-id> --show-build-logs
 zcli service log -S <service-id> --message-type WEBSERVER   # 502s on nginx/apache runtimes
 ```
 
-With `zz` (`references/zz-cli.md`) the same loop is exit-code driven, which is what you want when
-scripting it: `zz push api` exits **8** if the build or deploy failed and **7** if it is still
+With `zops` (`references/zops-cli.md`) the same loop is exit-code driven, which is what you want when
+scripting it: `zops push api` exits **8** if the build or deploy failed and **7** if it is still
 running, so no log parsing is needed to decide what happened.
 
 ```sh
-zz push api                                 # waits; exit 8 = failed, 7 = still running
-zz logs api --build                         # why it failed
-zz status                                   # project-wide state in one call
+zops push api                                 # waits; exit 8 = failed, 7 = still running
+zops logs api --build                         # why it failed
+zops status                                   # project-wide state in one call
 ```
 
 Then reach the app. Internally from any sibling or over the VPN — this always works and does not

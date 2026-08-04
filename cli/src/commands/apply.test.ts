@@ -1,5 +1,5 @@
 /**
- * The emitter is the one place `zz apply` can silently corrupt an import: it
+ * The emitter is the one place `zops apply` can silently corrupt an import: it
  * rebuilds a partial document for the services that are missing, and whatever
  * it gets wrong the platform accepts as fact. So every case here re-parses its
  * own output, and the preprocessor cases assert the expression survives the

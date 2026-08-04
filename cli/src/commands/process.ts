@@ -19,7 +19,7 @@ export const processCommands: CommandSpec[] = [
       { name: "limit", type: "number", default: 25, description: "How many processes to return." },
       { name: "status", type: "string", placeholder: "<status>", description: "Filter by status: PENDING, RUNNING, FINISHED, FAILED, CANCELED." },
     ],
-    examples: ["zz process list", "zz process list api --status FAILED --json"],
+    examples: ["zops process list", "zops process list api --status FAILED --json"],
     operations: ["ListProjectProcesses", "ListServiceStackProcesses"],
     async run(ctx, parsed) {
       const limit = ctx.flag<number>("limit") ?? 25;
@@ -53,7 +53,7 @@ export const processCommands: CommandSpec[] = [
     description: `Useful after a --no-wait command: exits 0 when the process reaches FINISHED, 8 if it fails
 or is canceled, and 7 if --timeout elapses first.`,
     args: [{ name: "process-id", description: "Process id.", required: true }],
-    examples: ["zz process wait 4bKq8vNwQ1yTbXZs2LpAcd --timeout 5m"],
+    examples: ["zops process wait 4bKq8vNwQ1yTbXZs2LpAcd --timeout 5m"],
     operations: ["GetProcessDetails"],
     async run(ctx, parsed) {
       const finished = await waitForProcess(ctx, parsed.args[0]!, { timeoutMs: ctx.timeoutMs });

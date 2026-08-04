@@ -1,5 +1,5 @@
 /**
- * `zz push` and `zz deploy`.
+ * `zops push` and `zops deploy`.
  *
  * Both follow the same four-step platform flow: create an app version, stream a gzipped tar to
  * the presigned URL it hands back, trigger the pipeline, then wait. `push` builds on the
@@ -13,7 +13,7 @@ import type { Context, ServiceSummary } from "../lib/context.ts";
 import { gzipStream, packArtifact, type WorkspaceState } from "../lib/archive.ts";
 import { waitForProcess, type ProcessInfo } from "../lib/process.ts";
 import { LogClient, FACILITY, SEVERITY } from "../lib/logs.ts";
-import { EXIT, ZzError, usage } from "../lib/errors.ts";
+import { EXIT, ZopsError, usage } from "../lib/errors.ts";
 
 interface AppVersion {
   id: string;
@@ -121,7 +121,7 @@ async function createAndUpload(
       duplex: "half",
     });
     if (!response.ok) {
-      throw new ZzError({
+      throw new ZopsError({
         code: "uploadFailed",
         message: `artifact upload failed: HTTP ${response.status}`,
         exitCode: response.status >= 500 ? EXIT.TRANSIENT : EXIT.ERROR,
@@ -216,12 +216,12 @@ async function runPipeline(
   } catch (err) {
     abort.abort();
     await Bun.sleep(150);
-    if (err instanceof ZzError && err.exitCode === EXIT.REMOTE_FAILED) {
-      throw new ZzError({
+    if (err instanceof ZopsError && err.exitCode === EXIT.REMOTE_FAILED) {
+      throw new ZopsError({
         code: err.code,
         message: err.message,
         exitCode: EXIT.REMOTE_FAILED,
-        hint: `Inspect the build output with \`zz logs ${service.name} --build --app-version ${appVersion.id}\`.`,
+        hint: `Inspect the build output with \`zops logs ${service.name} --build --app-version ${appVersion.id}\`.`,
         details: { ...err.details, appVersionId: appVersion.id },
       });
     }
@@ -239,7 +239,7 @@ whether the deployment actually succeeded:
 
   0  deployed and running
   7  still running when --timeout elapsed
-  8  build or deploy failed (read the streamed log, or use \`zz logs --build\`)
+  8  build or deploy failed (read the streamed log, or use \`zops logs --build\`)
 
 In a git repository the archive contains tracked plus untracked-not-ignored files. Outside one,
 or with --no-git, it contains the directory as it sits on disk. .deployignore applies either way.
@@ -255,10 +255,10 @@ One push deploys one setup. In a monorepo, run it once per service with --setup.
       { name: "skip-validation", type: "boolean", description: "Skip the server-side zerops.yaml check before uploading." },
     ],
     examples: [
-      "zz push api",
-      "zz push api --setup worker --version-name v1.4.2",
-      "zz push api --json --timeout 20m",
-      "zz push api --no-wait   # return as soon as the pipeline is queued",
+      "zops push api",
+      "zops push api --setup worker --version-name v1.4.2",
+      "zops push api --json --timeout 20m",
+      "zops push api --no-wait   # return as soon as the pipeline is queued",
     ],
     operations: ["ValidateZeropsYaml", "createAppVersion", "buildAndDeployAppVersion", "GetProcessDetails"],
     async run(ctx, parsed) {
@@ -331,8 +331,8 @@ the files come from the paths given on the command line rather than from deployF
     ],
     flags: [...SHARED_FLAGS],
     examples: [
-      "zz deploy api ./dist ./package.json",
-      "zz deploy api ./build --version-name ci-$GITHUB_SHA",
+      "zops deploy api ./dist ./package.json",
+      "zops deploy api ./build --version-name ci-$GITHUB_SHA",
     ],
     operations: ["createAppVersion", "deployAppVersion", "GetProcessDetails"],
     async run(ctx, parsed) {

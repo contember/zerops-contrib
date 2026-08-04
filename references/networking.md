@@ -120,8 +120,8 @@ error: Service stack is not http or https
 ```
 
 The subdomain needs a *deployed* HTTP port, so this is a field an import file cannot establish on
-its own. Deploy first, then `zz service enable-subdomain <service>` / `zcli service enable-subdomain`
-/ the GUI toggle — or re-run `zz apply`, which reports it as pending drift and converges it on the
+its own. Deploy first, then `zops service enable-subdomain <service>` / `zcli service enable-subdomain`
+/ the GUI toggle — or re-run `zops apply`, which reports it as pending drift and converges it on the
 next pass.
 
 Limitations: shared HTTPS balancer across all Zerops projects (scalability bottleneck), hard
@@ -167,9 +167,9 @@ curl -4 -v https://<domain>    # test each stack separately
 curl -6 -v https://<domain>
 ```
 
-`zz route http get <domain>` reports what the platform itself thinks — `dnsCheckStatus` per
+`zops route http get <domain>` reports what the platform itself thinks — `dnsCheckStatus` per
 domain and `sslStatus` for the certificate — which separates "DNS has not propagated" from
-"certificate never issued". After fixing a record, `zz route http dns-check <domain>` asks for a
+"certificate never issued". After fixing a record, `zops route http dns-check <domain>` asks for a
 re-check instead of waiting for the platform's own schedule.
 
 ## IP addresses
@@ -191,8 +191,8 @@ Available for **runtime services and PostgreSQL** only.
 - IPv4 and IPv6 configured independently.
 - Configure under *Subdomain & domain & IP access* (runtimes) or *Direct access through IP address*
   (PostgreSQL), then **Publish IP access changes**. Headlessly this is
-  `zz route port create|update|delete`, which publishes for you; a change made elsewhere needs
-  `zz route port sync` before it serves.
+  `zops route port create|update|delete`, which publishes for you; a change made elsewhere needs
+  `zops route port sync` before it serves.
 
 PostgreSQL public access always routes through pgBouncer on `6432` over TLS. The replica port
 `5433` is never exposed publicly.
@@ -205,7 +205,7 @@ PostgreSQL public access always routes through pgBouncer on `6432` over TLS. The
 - **Whitelist** — allow only listed IPs/CIDRs.
 
 Rules accept a single IP or a CIDR range. Set them with
-`zz route port create|update … --firewall-policy WHITELIST --firewall-ip-range <cidr>`;
+`zops route port create|update … --firewall-policy WHITELIST --firewall-ip-range <cidr>`;
 `--allow-my-ip` adds the caller's current public address, which is the usual way to open a
 database port to one workstation. `--firewall-ip-range` replaces the whole list rather than
 appending, so a tightened whitelist is one call.
@@ -281,11 +281,11 @@ Two modes today:
 
 An API mode (`${apiCdnUrl}`) is announced but not released.
 
-- Object-storage mode: enable the CDN option on the service (`zz cdn storage enable <service>`),
+- Object-storage mode: enable the CDN option on the service (`zops cdn storage enable <service>`),
   then set a **public read** policy — private objects are never cached, they always fall through
   to origin.
 - Static mode: enable **"Enable CDN for static files"** on the domain in the L7 balancer section,
-  or pass `--cdn` to `zz route http create` / `zz route http update`.
+  or pass `--cdn` to `zops route http create` / `zops route http update`.
   **Wildcard domains are not supported**; use specific names.
 - Test one node directly with `https://{cz|de|uk|au|sg|ca}-{storage|static}.cdn.zerops.app/…`.
 
@@ -303,12 +303,12 @@ zsc cdn purge example.com "/css/main.css$"
 ```
 
 `zsc cdn purge` runs from **any container in the project** that has the CDN-enabled domain active,
-and **only works for static mode**. From outside a container, `zz` covers both modes — and the two
+and **only works for static mode**. From outside a container, `zops` covers both modes — and the two
 are separate endpoints, so purging one does nothing to the other:
 
 ```sh
-zz cdn purge example.com "/images/"   # static mode, by domain and path
-zz cdn storage purge "images/" assets # object-storage mode, by object path in the bucket
+zops cdn purge example.com "/images/"   # static mode, by domain and path
+zops cdn storage purge "images/" assets # object-storage mode, by object path in the bucket
 ```
 
 Pattern rules: a `*` wildcard must be **at the end**, a specific file must end with `$`, and nested

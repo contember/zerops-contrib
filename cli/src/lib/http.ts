@@ -5,7 +5,7 @@
  * (so callers never inspect status codes), and retrying the classes of failure that are
  * actually worth retrying.
  */
-import { EXIT, ZzError, type ExitCode } from "./errors.ts";
+import { EXIT, ZopsError, type ExitCode } from "./errors.ts";
 import type { Output } from "./output.ts";
 import { findOperation, type OperationDef } from "./operations.ts";
 
@@ -74,9 +74,9 @@ function hintFor(exitCode: ExitCode, code: string | undefined): string | undefin
   if (exitCode === EXIT.AUTH) {
     return code === "notAllowedForApplicationToken"
       ? "This endpoint rejects personal access tokens; it requires an interactive user session."
-      : "Check the token with `zz auth status`, or generate a new one in the Zerops GUI under Settings → Access Token Management.";
+      : "Check the token with `zops auth status`, or generate a new one in the Zerops GUI under Settings → Access Token Management.";
   }
-  if (exitCode === EXIT.NOT_FOUND) return "List the available resources first, e.g. `zz service list`.";
+  if (exitCode === EXIT.NOT_FOUND) return "List the available resources first, e.g. `zops service list`.";
   if (exitCode === EXIT.TRANSIENT) return "Transient failure — retry with backoff.";
   return undefined;
 }
@@ -96,7 +96,7 @@ export class ApiClient {
       const name = raw.split(":")[0]!;
       const value = params[name];
       if (value === undefined) {
-        throw new ZzError({
+        throw new ZopsError({
           code: "usage",
           message: `missing path parameter '${name}' for ${template}`,
           exitCode: EXIT.USAGE,
@@ -109,20 +109,20 @@ export class ApiClient {
 
   async request<T = any>(options: RequestOptions): Promise<T> {
     const attempts = options.attempts ?? 3;
-    let lastError: ZzError | undefined;
+    let lastError: ZopsError | undefined;
 
     for (let attempt = 1; attempt <= attempts; attempt++) {
       try {
         return await this.once<T>(options);
       } catch (err) {
-        if (!(err instanceof ZzError) || err.exitCode !== EXIT.TRANSIENT || attempt === attempts) throw err;
+        if (!(err instanceof ZopsError) || err.exitCode !== EXIT.TRANSIENT || attempt === attempts) throw err;
         lastError = err;
         const delay = RETRY_BASE_MS * 2 ** (attempt - 1);
         this.out.debug(`retry ${attempt}/${attempts - 1} in ${delay}ms — ${err.message}`);
         await Bun.sleep(delay);
       }
     }
-    throw lastError ?? new ZzError({ code: "unknown", message: "request failed" });
+    throw lastError ?? new ZopsError({ code: "unknown", message: "request failed" });
   }
 
   private async once<T>(options: RequestOptions): Promise<T> {
@@ -152,7 +152,7 @@ export class ApiClient {
       });
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") throw err;
-      throw new ZzError({
+      throw new ZopsError({
         code: "networkError",
         message: `cannot reach ${url.host}: ${err instanceof Error ? err.message : String(err)}`,
         exitCode: EXIT.TRANSIENT,
@@ -178,11 +178,11 @@ export class ApiClient {
     }
   }
 
-  private async toError(response: Response, options: RequestOptions): Promise<ZzError> {
+  private async toError(response: Response, options: RequestOptions): Promise<ZopsError> {
     return this.toErrorFromText(response, await response.text(), options);
   }
 
-  private toErrorFromText(response: Response, text: string, options: RequestOptions): ZzError {
+  private toErrorFromText(response: Response, text: string, options: RequestOptions): ZopsError {
     let parsed: ApiErrorBody | undefined;
     try {
       parsed = JSON.parse(text) as ApiErrorBody;
@@ -194,7 +194,7 @@ export class ApiClient {
     const exitCode = classify(response.status, code);
     const message = parsed?.error?.message ?? (text.trim() || response.statusText || `HTTP ${response.status}`);
 
-    return new ZzError({
+    return new ZopsError({
       code: code ?? `http${response.status}`,
       message,
       exitCode,
@@ -208,7 +208,7 @@ export class ApiClient {
     });
   }
 
-  /** Invokes a generated operation by id. Backs both the curated commands and `zz api`. */
+  /** Invokes a generated operation by id. Backs both the curated commands and `zops api`. */
   async call<T = any>(
     operationId: string,
     input: { path?: Record<string, string>; query?: Record<string, unknown>; body?: unknown } = {},
@@ -216,11 +216,11 @@ export class ApiClient {
   ): Promise<T> {
     const op = findOperation(operationId);
     if (!op) {
-      throw new ZzError({
+      throw new ZopsError({
         code: "unknownOperation",
         message: `unknown operation '${operationId}'`,
         exitCode: EXIT.USAGE,
-        hint: "Run `zz api --list` to see every available operation.",
+        hint: "Run `zops api --list` to see every available operation.",
       });
     }
     return this.callOperation<T>(op, input, extra);

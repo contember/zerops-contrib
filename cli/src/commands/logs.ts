@@ -32,11 +32,11 @@ a quiet service in a noisy project comes back empty.`,
       { name: "short", type: "boolean", description: "Print only the message, without timestamp and tag." },
     ],
     examples: [
-      "zz logs api",
-      "zz logs api --follow",
-      "zz logs api --build",
-      "zz logs api --since 15m --severity WARNING",
-      "zz logs api --json | jq -r 'select(.severity <= 3) | .message'",
+      "zops logs api",
+      "zops logs api --follow",
+      "zops logs api --build",
+      "zops logs api --since 15m --severity WARNING",
+      "zops logs api --json | jq -r 'select(.severity <= 3) | .message'",
     ],
     operations: ["GetProjectLog", "listServiceStackAppVersions"],
     async run(ctx, parsed) {
@@ -64,7 +64,7 @@ a quiet service in a noisy project comes back empty.`,
             appVersionId
               ? `app version ${appVersionId} not found on ${service.name}`
               : `no build found for ${service.name}`,
-            "Run `zz version list` to see the deploy history.",
+            "Run `zops version list` to see the deploy history.",
           );
         }
         appVersionId = target.id;
@@ -72,7 +72,7 @@ a quiet service in a noisy project comes back empty.`,
         if (!buildServiceId) {
           throw usage(
             `app version #${target.sequence} has no build container (it was deployed, not built)`,
-            "Only versions created by `zz push` have build logs.",
+            "Only versions created by `zops push` have build logs.",
           );
         }
         serviceStackId = buildServiceId;

@@ -6,7 +6,7 @@
  */
 import { COMMANDS } from "./commands/index.ts";
 import { Context } from "./lib/context.ts";
-import { EXIT, ZzError, usage } from "./lib/errors.ts";
+import { EXIT, ZopsError, usage } from "./lib/errors.ts";
 import { GLOBAL_FLAGS, parseArgs, type CommandSpec, type FlagSpec } from "./lib/spec.ts";
 import { Output } from "./lib/output.ts";
 import { SPEC_VERSION } from "./lib/operations.ts";
@@ -21,7 +21,7 @@ const GLOBAL_VALUE_SHORTS = new Set(
 /**
  * Positions of the tokens that can be command words.
  *
- * A global flag may precede the command (`zz --token X auth status`), and its value is a bare
+ * A global flag may precede the command (`zops --token X auth status`), and its value is a bare
  * word that must not be mistaken for one — hence skipping the argument after a value-taking
  * global flag. Command-specific flags are not known until the command is matched, but in
  * practice they follow it, and anything unrecognised is rejected later by the parser.
@@ -93,7 +93,7 @@ function commandUsageLine(command: CommandSpec): string {
   const args = (command.args ?? [])
     .map((a) => (a.required ? `<${a.name}>` : `[${a.name}]`) + (a.variadic ? "..." : ""))
     .join(" ");
-  return `zz ${command.path.join(" ")}${args ? ` ${args}` : ""} [flags]`;
+  return `zops ${command.path.join(" ")}${args ? ` ${args}` : ""} [flags]`;
 }
 
 export function renderCommandHelp(command: CommandSpec): string {
@@ -144,9 +144,9 @@ export function renderRootHelp(): string {
   }
 
   const lines: string[] = [
-    "zz — agent-first CLI for the Zerops API",
+    "zops — agent-first CLI for the Zerops API",
     "",
-    "Usage: zz <command> [subcommand] [flags]",
+    "Usage: zops <command> [subcommand] [flags]",
     "",
     "Output contract: stdout carries data only; progress, warnings and errors go to stderr.",
     "Every command accepts --json (structured) and --quiet (bare values, one per line).",
@@ -175,9 +175,9 @@ export function renderRootHelp(): string {
     "  3 auth error",
     "",
     "Discovery:",
-    "  zz commands --json     full machine-readable command catalog",
-    "  zz api --list          every raw API operation",
-    "  zz <command> --help    flags, arguments and examples for one command",
+    "  zops commands --json     full machine-readable command catalog",
+    "  zops api --list          every raw API operation",
+    "  zops <command> --help    flags, arguments and examples for one command",
     "",
   );
   return lines.join("\n");
@@ -186,7 +186,7 @@ export function renderRootHelp(): string {
 export async function run(argv: string[]): Promise<number> {
   const wantsVersion = argv.includes("--version");
   if (wantsVersion) {
-    process.stdout.write(`zz ${VERSION} (api spec ${SPEC_VERSION})\n`);
+    process.stdout.write(`zops ${VERSION} (api spec ${SPEC_VERSION})\n`);
     return EXIT.OK;
   }
 
@@ -200,7 +200,7 @@ export async function run(argv: string[]): Promise<number> {
       process.stdout.write(renderRootHelp());
       return firstWord || wantsHelp ? EXIT.OK : EXIT.USAGE;
     }
-    // A bare group name ("zz service") lists that group rather than erroring out.
+    // A bare group name ("zops service") lists that group rather than erroring out.
     const group = COMMANDS.filter((c) => c.path[0] === firstWord);
     const out = new Output({});
     if (group.length > 0) {
@@ -216,7 +216,7 @@ export async function run(argv: string[]): Promise<number> {
     out.fail(
       usage(
         `unknown command '${firstWord}'`,
-        near.length ? `Did you mean: ${near.slice(0, 5).join(", ")}?` : "Run `zz --help` for the command list.",
+        near.length ? `Did you mean: ${near.slice(0, 5).join(", ")}?` : "Run `zops --help` for the command list.",
       ),
     );
     return EXIT.USAGE;
@@ -246,11 +246,11 @@ export async function run(argv: string[]): Promise<number> {
     return EXIT.OK;
   } catch (err) {
     const out = ctx?.out ?? new Output({ json: argv.includes("--json") });
-    if (err instanceof ZzError) {
+    if (err instanceof ZopsError) {
       out.fail(err);
       return err.exitCode;
     }
-    const wrapped = new ZzError({
+    const wrapped = new ZopsError({
       code: "internalError",
       message: err instanceof Error ? err.message : String(err),
       exitCode: EXIT.ERROR,

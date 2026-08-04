@@ -251,7 +251,7 @@ services:
 
 Connect in the GUI (*Shared storage connections*), via `mount:` in the import YAML (requires
 `buildFromGit`), with `zsc shared-storage mount|unmount|wait <name>` from inside a container, or
-from outside with `zz service shared-storage connect <storage> <service>` (and `disconnect`).
+from outside with `zops service shared-storage connect <storage> <service>` (and `disconnect`).
 
 ## Backups
 
@@ -350,7 +350,7 @@ Forwarding is available to Better Stack, Papertrail, and self-hosted ELK. Zerops
 source name `s_src` (not `s_sys`); system certificates live at `/etc/ssl/certs`.
 
 Configured in the GUI, or headlessly with
-`zz project logging --type syslog --config ./syslog.conf [--certificate ./ca.pem]`. The config
+`zops project logging --type syslog --config ./syslog.conf [--certificate ./ca.pem]`. The config
 block is passed through verbatim, so its syntax is the collector's, not Zerops'. `--type ''`
 stops forwarding.
 
@@ -387,7 +387,7 @@ value:
 Managed services expose their own exporters on this variable too (e.g. Valkey at `db:9121`).
 
 To scrape something *outside* the project, point the Prometheus core at it explicitly:
-`zz project prometheus --target metrics.example.com:9090 --label env=prod`, or
+`zops project prometheus --target metrics.example.com:9090 --label env=prod`, or
 `--config-file <json>` for more than one target group.
 
 Some PostgreSQL dashboards need `CREATE EXTENSION IF NOT EXISTS pg_stat_statements;` as superuser

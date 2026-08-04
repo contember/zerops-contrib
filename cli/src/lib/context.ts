@@ -8,7 +8,7 @@
 import { ApiClient } from "./http.ts";
 import { Output } from "./output.ts";
 import { loadConfig, type ResolvedConfig } from "./config.ts";
-import { EXIT, ZzError, authError, notFound, usage } from "./errors.ts";
+import { EXIT, ZopsError, authError, notFound, usage } from "./errors.ts";
 import { parseDuration, type ParsedArgs } from "./spec.ts";
 
 /** Zerops ids are 22-character base62 strings. */
@@ -93,7 +93,7 @@ export class Context {
     if (!this.config.token) {
       throw authError(
         "no access token configured",
-        "Run `zz auth login <token>`, or set ZEROPS_TOKEN. Create a token in the Zerops GUI under Settings → Access Token Management.",
+        "Run `zops auth login <token>`, or set ZEROPS_TOKEN. Create a token in the Zerops GUI under Settings → Access Token Management.",
       );
     }
     return this.config.token;
@@ -115,9 +115,9 @@ export class Context {
     for await (const line of console) {
       const answer = line.trim().toLowerCase();
       if (answer === "y" || answer === "yes") return;
-      throw new ZzError({ code: "aborted", message: "aborted by user", exitCode: EXIT.USAGE });
+      throw new ZopsError({ code: "aborted", message: "aborted by user", exitCode: EXIT.USAGE });
     }
-    throw new ZzError({ code: "aborted", message: "aborted — no input", exitCode: EXIT.USAGE });
+    throw new ZopsError({ code: "aborted", message: "aborted — no input", exitCode: EXIT.USAGE });
   }
 
   // --- identity ------------------------------------------------------------
@@ -145,7 +145,7 @@ export class Context {
     if (!ref) {
       throw usage(
         "no project selected",
-        "Pass --project <name|id>, set ZEROPS_PROJECT, or run `zz project list` to see the options.",
+        "Pass --project <name|id>, set ZEROPS_PROJECT, or run `zops project list` to see the options.",
       );
     }
     this.cachedProject = await this.resolveProject(ref);
@@ -165,7 +165,7 @@ export class Context {
       try {
         return await this.api.call<ProjectSummary>("GetProjectDetails", { path: { id: ref } });
       } catch (err) {
-        if (!(err instanceof ZzError) || err.exitCode !== EXIT.NOT_FOUND) throw err;
+        if (!(err instanceof ZopsError) || err.exitCode !== EXIT.NOT_FOUND) throw err;
       }
     }
     const clientId = await this.clientId();
@@ -179,7 +179,7 @@ export class Context {
     }>("GetClientProjectsByName", { path: { id: clientId, name: ref } });
     const items = found.projects ?? found.items ?? found.list ?? [];
     if (items.length === 0) {
-      throw notFound(`no project named '${ref}'`, "Run `zz project list` to see available projects.");
+      throw notFound(`no project named '${ref}'`, "Run `zops project list` to see available projects.");
     }
     if (items.length > 1) {
       throw usage(
@@ -198,7 +198,7 @@ export class Context {
     if (!target) {
       throw usage(
         "no service selected",
-        "Pass the service as an argument or --service <hostname|id>, or run `zz service list`.",
+        "Pass the service as an argument or --service <hostname|id>, or run `zops service list`.",
       );
     }
     const cached = this.serviceCache.get(target);
@@ -209,7 +209,7 @@ export class Context {
       try {
         resolved = await this.api.call<ServiceSummary>("GetServiceStack", { path: { id: target } });
       } catch (err) {
-        if (!(err instanceof ZzError) || err.exitCode !== EXIT.NOT_FOUND) throw err;
+        if (!(err instanceof ZopsError) || err.exitCode !== EXIT.NOT_FOUND) throw err;
       }
     }
     if (!resolved) {
@@ -219,7 +219,7 @@ export class Context {
           path: { projectId, name: target },
         });
       } catch (err) {
-        if (err instanceof ZzError && err.exitCode === EXIT.NOT_FOUND) {
+        if (err instanceof ZopsError && err.exitCode === EXIT.NOT_FOUND) {
           const available = await this.listServices();
           throw notFound(
             `no service named '${target}' in project ${(await this.project()).name}`,

@@ -17,12 +17,12 @@
 
 | Method | How |
 |---|---|
-| Continuous deployment | Connect a GitHub/GitLab repo in *Pipelines & CI/CD settings*, or `zz repo connect <owner/name> <service> --branch main`. Trigger on push to a branch or on a new tag (optional regex filter). |
-| On demand, CLI | `zcli service push` / `zz push` (build + deploy), or `zcli service deploy` / `zz deploy` (deploy only) |
-| On demand, from the connected repo | `zz repo build <service>` — rebuilds the repository head without a push |
+| Continuous deployment | Connect a GitHub/GitLab repo in *Pipelines & CI/CD settings*, or `zops repo connect <owner/name> <service> --branch main`. Trigger on push to a branch or on a new tag (optional regex filter). |
+| On demand, CLI | `zcli service push` / `zops push` (build + deploy), or `zcli service deploy` / `zops deploy` (deploy only) |
+| On demand, from the connected repo | `zops repo build <service>` — rebuilds the repository head without a push |
 | On demand, GUI | *Pipelines & CI/CD settings* → **Re-deploy last pipeline** or **Trigger new pipeline** |
 | One-time at import | `buildFromGit: <public-repo-url>` in the import YAML |
-| Any Git URL, no webhook | `zz pipeline trigger <service> --from-git <url>` — the same mechanism as `buildFromGit`, on demand |
+| Any Git URL, no webhook | `zops pipeline trigger <service> --from-git <url>` — the same mechanism as `buildFromGit`, on demand |
 
 Add `[ci skip]` or `[skip ci]` (with brackets, case-insensitive) to a commit message to suppress a
 webhook build.
@@ -185,19 +185,19 @@ access in order to manage the webhook and pull code, and does not store your sou
 Disconnect with **Stop automatic build trigger**, which removes the webhook and the integration
 config.
 
-Headless equivalents (`references/zz-cli.md`):
+Headless equivalents (`references/zops-cli.md`):
 
 ```sh
-zz repo list                                        # also an authorization check
-zz repo connect acme/api api --branch main
-zz repo connect acme/api api --tag-regex '^v[0-9]'  # the production-grade trigger
-zz repo status api                                  # what is connected, and whether it can fire
-zz repo disable api --yes                           # stop building on push, keep the config
+zops repo list                                        # also an authorization check
+zops repo connect acme/api api --branch main
+zops repo connect acme/api api --tag-regex '^v[0-9]'  # the production-grade trigger
+zops repo status api                                  # what is connected, and whether it can fire
+zops repo disable api --yes                           # stop building on push, keep the config
 ```
 
-**The OAuth grant is still GUI-only.** `zz repo connect` registers the integration but cannot
+**The OAuth grant is still GUI-only.** `zops repo connect` registers the integration but cannot
 authorize Zerops against the forge, so on a fresh account the hook is created and then never
-fires — `zz repo status` reports `authorizationRequired: true`. Authorize once in the GUI, and
+fires — `zops repo status` reports `authorizationRequired: true`. Authorize once in the GUI, and
 every later connection is scriptable.
 
 `[ci skip]` / `[skip ci]` in a commit message (with brackets, case-insensitive) suppresses the
@@ -306,14 +306,14 @@ cause, so the pipeline has to be bisected:
 
 1. Replace `buildCommands` with `echo` and `deployFiles` with a single file. Still failing means the
    cause is upstream of your commands.
-2. Push the identical tree with the *other* CLI (`zcli push` vs `zz push`). If one works, the
+2. Push the identical tree with the *other* CLI (`zcli push` vs `zops push`). If one works, the
    difference is the upload archive, not the repository or `zerops.yaml`.
 3. Compare the two archives: `tar -tvzf a.tar.gz | grep -c '^d'`.
 
 The known cause is **an archive with no directory entries**. The platform's unpacker does not create
 parents, so it dies on the first file whose directory is missing. GNU tar reads such an archive
 happily — it creates parents implicitly — so it looks valid locally. `zcli` writes them (520 for a
-2300-file repo); `zz` did not until this was found.
+2300-file repo); `zops` did not until this was found.
 
 Rule worth carrying: **a tar GNU tar accepts is not proof the receiver accepts it.** When you build
 an archive for this platform, assert the directory entries are there.

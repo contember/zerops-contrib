@@ -192,7 +192,7 @@ services:
 
 ## Reading variables back
 
-The endpoint behind `zz env list` / the API's `ListServiceStackUserData` covers **only variables
+The endpoint behind `zops env list` / the API's `ListServiceStackUserData` covers **only variables
 stored on the service** — `envSecrets` and anything set in the GUI. Two verified surprises:
 
 - **Before the first deploy it answers `400 serviceStackNotFound`**, even though the service plainly
@@ -202,7 +202,7 @@ stored on the service** — `envSecrets` and anything set in the GUI. Two verifi
 - **`run.envVariables` never appear there at all**, before or after a deploy. They are baked into the
   app version rather than stored as service user-data, so the endpoint has nothing to return.
 
-`zz env show` is the one that answers "what does the process actually see" — the resolved
+`zops env show` is the one that answers "what does the process actually see" — the resolved
 environment, generated variables included. Reach for it when debugging; `env list` only ever tells
 you what is *set on the service*.
 

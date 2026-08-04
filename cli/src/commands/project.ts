@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import type { CommandSpec } from "../lib/spec.ts";
 import { settleProcess } from "../lib/process.ts";
-import { EXIT, ZzError, notFound, usage } from "../lib/errors.ts";
+import { EXIT, ZopsError, notFound, usage } from "../lib/errors.ts";
 import { esFilter } from "../lib/extra-operations.ts";
 import type { ProjectSummary } from "../lib/context.ts";
 
@@ -31,7 +31,7 @@ the search endpoint correctly returns the projects the token can actually reach.
     flags: [
       { name: "status", type: "string", placeholder: "<status>", description: "Only projects with this status, e.g. ACTIVE." },
     ],
-    examples: ["zz project list", "zz project list --json", "zz project list -q   # bare names"],
+    examples: ["zops project list", "zops project list --json", "zops project list -q   # bare names"],
     operations: ["ListClientProjects", "SearchProject"],
     async run(ctx) {
       const clientId = await ctx.clientId();
@@ -43,7 +43,7 @@ the search endpoint correctly returns the projects the token can actually reach.
         );
         items = res.items ?? res.list ?? [];
       } catch (err) {
-        if (!(err instanceof ZzError) || err.exitCode !== EXIT.AUTH) throw err;
+        if (!(err instanceof ZopsError) || err.exitCode !== EXIT.AUTH) throw err;
         ctx.out.debug("org-wide listing denied; falling back to the search endpoint");
         const res = await ctx.api.call<{ items?: ProjectSummary[] }>("SearchProject", {
           body: esFilter([{ name: "clientId", operator: "eq", value: clientId }], {
@@ -61,7 +61,7 @@ the search endpoint correctly returns the projects the token can actually reach.
     path: ["project", "get"],
     summary: "Show one project in detail.",
     args: [{ name: "project", description: "Project name or id. Defaults to --project." }],
-    examples: ["zz project get myapp", "zz project get --json"],
+    examples: ["zops project get myapp", "zops project get --json"],
     operations: ["GetProjectDetails"],
     async run(ctx, parsed) {
       const project = parsed.args[0] ? await ctx.resolveProject(parsed.args[0]) : await ctx.project();
@@ -72,7 +72,7 @@ the search endpoint correctly returns the projects the token can actually reach.
     path: ["project", "create"],
     summary: "Create an empty project.",
     description: `Creates a project with no services. To create a project and its services together, write an
-import YAML and use \`zz project import\` instead — that is the normal path.`,
+import YAML and use \`zops project import\` instead — that is the normal path.`,
     flags: [
       { name: "name", type: "string", required: true, placeholder: "<name>", description: "Project name." },
       { name: "mode", type: "string", enum: ["LIGHT", "SERIOUS"], default: "LIGHT", description: "LIGHT is single-container core; SERIOUS is the HA core." },
@@ -81,7 +81,7 @@ import YAML and use \`zz project import\` instead — that is the normal path.`,
       { name: "env-isolation", type: "string", enum: ["none", "service"], description: "Environment variable visibility between services." },
       { name: "location", type: "string", placeholder: "<id>", description: "Preferred location id." },
     ],
-    examples: ["zz project create --name myapp --mode LIGHT"],
+    examples: ["zops project create --name myapp --mode LIGHT"],
     operations: ["CreateProject"],
     async run(ctx) {
       const clientId = await ctx.clientId();
@@ -108,7 +108,7 @@ which describes the build pipeline and lives in the repository.
 
 Waits for the resulting processes unless --no-wait is given.`,
     args: [{ name: "file", description: "Path to the import YAML, or '-' for stdin.", required: true }],
-    examples: ["zz project import zerops-import.yaml", "cat import.yaml | zz project import -"],
+    examples: ["zops project import zerops-import.yaml", "cat import.yaml | zops project import -"],
     operations: ["ImportProject"],
     async run(ctx, parsed) {
       const yaml = await readYaml(parsed.args[0]!);
@@ -132,9 +132,9 @@ Waits for the resulting processes unless --no-wait is given.`,
   {
     path: ["project", "export"],
     summary: "Export a project as import YAML.",
-    description: "Round-trips through `zz project import`, which makes it the supported way to clone an environment.",
+    description: "Round-trips through `zops project import`, which makes it the supported way to clone an environment.",
     args: [{ name: "project", description: "Project name or id. Defaults to --project." }],
-    examples: ["zz project export myapp > import.yaml"],
+    examples: ["zops project export myapp > import.yaml"],
     operations: ["ExportProject"],
     async run(ctx, parsed) {
       const project = parsed.args[0] ? await ctx.resolveProject(parsed.args[0]) : await ctx.project();
@@ -177,7 +177,7 @@ Waits for the resulting processes unless --no-wait is given.`,
     summary: "Delete a project and everything in it.",
     destructive: true,
     args: [{ name: "project", description: "Project name or id. Defaults to --project." }],
-    examples: ["zz project delete throwaway --yes", "zz project delete throwaway --dry-run"],
+    examples: ["zops project delete throwaway --yes", "zops project delete throwaway --dry-run"],
     operations: ["DeleteProject"],
     async run(ctx, parsed) {
       const project = parsed.args[0] ? await ctx.resolveProject(parsed.args[0]) : await ctx.project();
@@ -202,8 +202,8 @@ User roles are deliberately left alone; this command never touches who can acces
       { name: "tag", type: "string[]", placeholder: "<tag>", description: "Tag to set. Repeatable, and replaces the existing list." },
     ],
     examples: [
-      "zz project update --name myapp-staging",
-      "zz project update myapp --tag prod --tag billing",
+      "zops project update --name myapp-staging",
+      "zops project update myapp --tag prod --tag billing",
     ],
     operations: ["GetProjectDetails", "UpdateProject"],
     async run(ctx, parsed) {
@@ -241,7 +241,7 @@ cost increase is not reversible from here.`,
       { name: "mode", description: "Target core mode. Only SERIOUS is a valid upgrade target.", required: true },
       { name: "project", description: "Project name or id. Defaults to --project." },
     ],
-    examples: ["zz project mode SERIOUS --yes", "zz project mode SERIOUS myapp --dry-run"],
+    examples: ["zops project mode SERIOUS --yes", "zops project mode SERIOUS myapp --dry-run"],
     operations: ["PutProjectModeUpgrade"],
     async run(ctx, parsed) {
       const mode = parsed.args[0]!.toUpperCase();
@@ -259,7 +259,7 @@ cost increase is not reversible from here.`,
     path: ["project", "ipv4", "request"],
     summary: "Request a dedicated public IPv4 address for the project.",
     description: `A dedicated address is billed and is what raw TCP/UDP port routing needs when the shared
-address is not enough. \`zz project get\` reports the assigned address once it is provisioned.`,
+address is not enough. \`zops project get\` reports the assigned address once it is provisioned.`,
     destructive: true,
     args: [{ name: "project", description: "Project name or id. Defaults to --project." }],
     operations: ["RequestIpv4"],
@@ -279,7 +279,7 @@ address is not enough. \`zz project get\` reports the assigned address once it i
       { name: "state", description: "'on' or 'off'.", required: true },
       { name: "project", description: "Project name or id. Defaults to --project." },
     ],
-    examples: ["zz project ipv4 shared on", "zz project ipv4 shared off myapp"],
+    examples: ["zops project ipv4 shared on", "zops project ipv4 shared off myapp"],
     operations: ["PutProjectPublicIpV4Shared"],
     async run(ctx, parsed) {
       const state = parsed.args[0]!.toLowerCase();
@@ -300,8 +300,8 @@ address is not enough. \`zz project get\` reports the assigned address once it i
   {
     path: ["project", "tags"],
     summary: "List every project tag used in the organization.",
-    description: "The vocabulary `zz project update --tag` draws from, so a new project can be tagged consistently with the existing ones.",
-    examples: ["zz project tags -q"],
+    description: "The vocabulary `zops project update --tag` draws from, so a new project can be tagged consistently with the existing ones.",
+    examples: ["zops project tags -q"],
     operations: ["ListProjectTags"],
     async run(ctx) {
       const clientId = await ctx.clientId();
@@ -321,7 +321,7 @@ Pass --type '' to stop forwarding.`,
       { name: "config", type: "string", placeholder: "<path>", description: "File holding the syslog configuration block." },
       { name: "certificate", type: "string", placeholder: "<path>", description: "File holding the TLS certificate for the endpoint." },
     ],
-    examples: ["zz project logging --type syslog --config ./syslog.conf"],
+    examples: ["zops project logging --type syslog --config ./syslog.conf"],
     operations: ["ConfigureRemoteLogging"],
     async run(ctx) {
       const projectId = await ctx.projectId();
@@ -341,7 +341,7 @@ Pass --type '' to stop forwarding.`,
     path: ["project", "balancer", "get"],
     summary: "Show the project's L7 HTTP balancer configuration.",
     description: "The tunables applied to every routed domain in the project — timeouts, body size limits and the like.",
-    examples: ["zz project balancer get --json"],
+    examples: ["zops project balancer get --json"],
     operations: ["GetProjectL7httpbalancerConfig"],
     async run(ctx) {
       const projectId = await ctx.projectId();
@@ -363,15 +363,15 @@ Pass --type '' to stop forwarding.`,
     path: ["project", "balancer", "set"],
     summary: "Change one or more L7 balancer settings.",
     description: `Reads the current configuration and merges, so an unlisted setting is untouched. Run
-\`zz project balancer get\` first for the names this project accepts — they are the balancer's,
+\`zops project balancer get\` first for the names this project accepts — they are the balancer's,
 not a fixed Zerops list.
 
 Pass \`name=\` with an empty value to reset one back to its default.`,
     destructive: true,
     args: [{ name: "assignment", description: "One or more name=value pairs.", required: true, variadic: true }],
     examples: [
-      "zz project balancer set client_max_body_size=50m --yes",
-      "zz project balancer set proxy_read_timeout=120s proxy_send_timeout=120s --yes",
+      "zops project balancer set client_max_body_size=50m --yes",
+      "zops project balancer set proxy_read_timeout=120s proxy_send_timeout=120s --yes",
     ],
     operations: ["GetProjectL7httpbalancerConfig", "PutProjectL7httpbalancerConfig"],
     async run(ctx, parsed) {
@@ -414,8 +414,8 @@ For anything beyond one target group, pass a JSON file with --config-file holdin
       { name: "instance", type: "string", placeholder: "<id>", description: "Core stack instance id, when the project has more than one." },
     ],
     examples: [
-      "zz project prometheus --target metrics.example.com:9090 --label env=prod",
-      "zz project prometheus --config-file ./scrape.json",
+      "zops project prometheus --target metrics.example.com:9090 --label env=prod",
+      "zops project prometheus --config-file ./scrape.json",
     ],
     operations: ["ConfigurePrometheus"],
     async run(ctx) {
@@ -449,7 +449,7 @@ For anything beyond one target group, pass a JSON file with --config-file holdin
     path: ["project", "service-import"],
     summary: "Add services to an existing project from an import YAML.",
     args: [{ name: "file", description: "Path to the services YAML, or '-' for stdin.", required: true }],
-    examples: ["zz project service-import add-redis.yaml -P myapp"],
+    examples: ["zops project service-import add-redis.yaml -P myapp"],
     operations: ["ImportServiceStack"],
     async run(ctx, parsed) {
       const yaml = await readYaml(parsed.args[0]!);
@@ -472,7 +472,7 @@ export const projectEnvCommands: CommandSpec[] = [
   {
     path: ["project", "env", "list"],
     summary: "List project-level environment variables.",
-    description: "Project variables are visible to every service. Service-scoped variables live under `zz env`.",
+    description: "Project variables are visible to every service. Service-scoped variables live under `zops env`.",
     operations: ["GetProjectEnvFile"],
     async run(ctx) {
       const projectId = await ctx.projectId();
@@ -500,7 +500,7 @@ export const projectEnvCommands: CommandSpec[] = [
       { name: "value", description: "Value, or '-' to read from stdin.", required: true },
     ],
     flags: [{ name: "sensitive", type: "boolean", description: "Store as a secret; the value is redacted on read." }],
-    examples: ["zz project env set API_MODE production", "echo -n s3cr3t | zz project env set TOKEN - --sensitive"],
+    examples: ["zops project env set API_MODE production", "echo -n s3cr3t | zops project env set TOKEN - --sensitive"],
     operations: ["CreateProjectEnv", "UpdateProjectEnv"],
     async run(ctx, parsed) {
       const key = parsed.args[0]!;
@@ -545,7 +545,7 @@ export const projectEnvCommands: CommandSpec[] = [
         path: { id: projectId },
       });
       const existing = project.envVariables?.find((v) => v.key === key);
-      if (!existing) throw notFound(`project has no variable '${key}'`, "Run `zz project env list`.");
+      if (!existing) throw notFound(`project has no variable '${key}'`, "Run `zops project env list`.");
       await ctx.confirm(`delete project variable ${key}`);
       if (ctx.dryRun) return { dryRun: true, operation: "DeleteProjectEnv", key };
       const proc = await ctx.api.call<{ id: string }>("DeleteProjectEnv", { path: { id: existing.id } });
@@ -556,13 +556,13 @@ export const projectEnvCommands: CommandSpec[] = [
     path: ["project", "env", "import"],
     summary: "Replace the project's variables from a .env file.",
     description: `A wholesale replacement, not a merge: keys absent from the file are removed. Export first
-with \`zz project env export\` if you mean to add to what is there.
+with \`zops project env export\` if you mean to add to what is there.
 
 Services keep the old values until they are restarted — a variable write alone does not
 recreate running containers.`,
     destructive: true,
     args: [{ name: "file", description: "Path to a .env file, or '-' for stdin.", required: true }],
-    examples: ["zz project env import .env.production --yes", "cat .env | zz project env import - --yes"],
+    examples: ["zops project env import .env.production --yes", "cat .env | zops project env import - --yes"],
     operations: ["UpdateProjectEnvFile"],
     async run(ctx, parsed) {
       const path = parsed.args[0]!;
@@ -578,7 +578,7 @@ recreate running containers.`,
     path: ["project", "env", "export"],
     summary: "Print the project env file as shell exports.",
     flags: [{ name: "user-only", type: "boolean", description: "Only user-defined variables, excluding generated ones." }],
-    examples: ["eval \"$(zz project env export)\""],
+    examples: ["eval \"$(zops project env export)\""],
     operations: ["GetProjectEnvFile"],
     async run(ctx) {
       const projectId = await ctx.projectId();

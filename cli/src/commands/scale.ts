@@ -39,7 +39,7 @@ export const scaleCommands: CommandSpec[] = [
     path: ["scale", "get"],
     summary: "Show a service's current scaling configuration.",
     args: [{ name: "service", description: "Service hostname or id. Defaults to --service." }],
-    examples: ["zz scale get api", "zz scale get api --json"],
+    examples: ["zops scale get api", "zops scale get api --json"],
     operations: ["GetServiceStack"],
     async run(ctx, parsed) {
       const service = await ctx.service(parsed.args[0]);
@@ -85,10 +85,10 @@ services have a fixed container count decided by their :single / :ha type and re
       { name: "profile", type: "string", placeholder: "<id>", description: "Autoscaling profile id, e.g. oltp-production." },
     ],
     examples: [
-      "zz scale set api --min-containers 2 --max-containers 5",
-      "zz scale set api --max-cpu 8 --max-ram 16 --cpu-mode DEDICATED",
-      "zz scale set db --profile oltp-production",
-      "zz scale set api --min-containers 2 --dry-run --json",
+      "zops scale set api --min-containers 2 --max-containers 5",
+      "zops scale set api --max-cpu 8 --max-ram 16 --cpu-mode DEDICATED",
+      "zops scale set db --profile oltp-production",
+      "zops scale set api --min-containers 2 --dry-run --json",
     ],
     operations: ["GetServiceStack", "ConfigureAutoscaling"],
     async run(ctx, parsed) {
@@ -104,7 +104,7 @@ services have a fixed container count decided by their :single / :ha type and re
       if (touched.length === 0) {
         throw usage(
           "nothing to change",
-          "Pass at least one of --min-cpu, --max-cpu, --min-ram, --max-ram, --min-containers, --max-containers, --cpu-mode, --profile. Run `zz scale get` to see current values.",
+          "Pass at least one of --min-cpu, --max-cpu, --min-ram, --max-ram, --min-containers, --max-containers, --cpu-mode, --profile. Run `zops scale get` to see current values.",
         );
       }
 

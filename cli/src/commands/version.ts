@@ -47,7 +47,7 @@ export const versionCommands: CommandSpec[] = [
       { name: "limit", type: "number", default: 20, description: "How many versions to return." },
       { name: "status", type: "string", placeholder: "<status>", description: "Filter by status, e.g. ACTIVE or BUILD_FAILED." },
     ],
-    examples: ["zz version list api", "zz version list api --status BUILD_FAILED --json"],
+    examples: ["zops version list api", "zops version list api --status BUILD_FAILED --json"],
     operations: ["listServiceStackAppVersions"],
     async run(ctx, parsed) {
       const service = await ctx.service(parsed.args[0]);
@@ -81,9 +81,9 @@ deploy" case.`,
     ],
     flags: [{ name: "sequence", type: "number", placeholder: "<n>", description: "Select the target by sequence number instead of id." }],
     examples: [
-      "zz version rollback api",
-      "zz version rollback api --sequence 41 --yes",
-      "zz version rollback api 3mKq8vNwQ1yTbXZs2LpAcd --yes",
+      "zops version rollback api",
+      "zops version rollback api --sequence 41 --yes",
+      "zops version rollback api 3mKq8vNwQ1yTbXZs2LpAcd --yes",
     ],
     operations: ["listServiceStackAppVersions", "deployAppVersion"],
     async run(ctx, parsed) {
@@ -104,7 +104,7 @@ deploy" case.`,
         if (!target) {
           throw usage(
             `no previous version to roll back to on ${service.name}`,
-            "Run `zz version list` to see the history.",
+            "Run `zops version list` to see the history.",
           );
         }
       }
@@ -127,13 +127,13 @@ deploy" case.`,
     path: ["version", "rename"],
     summary: "Give an app version a readable name.",
     description: `Deploy history is otherwise identified by sequence number and id. Naming the versions that
-matter — a release tag, a known-good build — makes \`zz version rollback\` a decision rather
+matter — a release tag, a known-good build — makes \`zops version rollback\` a decision rather
 than a guess.`,
     args: [
       { name: "app-version-id", description: "App version id.", required: true },
       { name: "name", description: "Label to attach.", required: true },
     ],
-    examples: ["zz version rename 3mKq8vNwQ1yTbXZs2LpAcd 'v1.4.0 — known good'"],
+    examples: ["zops version rename 3mKq8vNwQ1yTbXZs2LpAcd 'v1.4.0 — known good'"],
     operations: ["updateAppVersion"],
     async run(ctx, parsed) {
       const [id, name] = [parsed.args[0]!, parsed.args[1]!];
@@ -152,8 +152,8 @@ running" when the repository has moved on, and to diff a working deploy against 
 The URL is a credential — anyone with it can download the application code until it expires.`,
     args: [{ name: "app-version-id", description: "App version id.", required: true }],
     examples: [
-      "zz version download-url 3mKq8vNwQ1yTbXZs2LpAcd -q",
-      "curl -sL \"$(zz version download-url 3mKq... -q)\" -o deployed.tar.gz",
+      "zops version download-url 3mKq8vNwQ1yTbXZs2LpAcd -q",
+      "curl -sL \"$(zops version download-url 3mKq... -q)\" -o deployed.tar.gz",
     ],
     operations: ["getAppVersionAppCode"],
     async run(ctx, parsed) {

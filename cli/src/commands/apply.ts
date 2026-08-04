@@ -7,7 +7,7 @@
  * script rather than a declaration of state, and it starts drifting the first
  * time somebody changes scaling in the GUI.
  *
- * `zz apply` closes the cheap half of that gap: it reads the declaration, reads
+ * `zops apply` closes the cheap half of that gap: it reads the declaration, reads
  * what is actually there, and reconciles the fields the API can safely change
  * in place. Everything it cannot converge — a changed service type, an HA
  * variant, a service nobody declared — is *reported*, never silently ignored
@@ -21,7 +21,7 @@ import { readFile } from "node:fs/promises";
 import type { CommandSpec } from "../lib/spec.ts";
 import type { Context, ServiceSummary } from "../lib/context.ts";
 import { settleProcess } from "../lib/process.ts";
-import { EXIT, ZzError, usage } from "../lib/errors.ts";
+import { EXIT, ZopsError, usage } from "../lib/errors.ts";
 
 interface DeclaredService {
   hostname?: string;
@@ -161,7 +161,7 @@ async function listUserData(ctx: Context, serviceId: string): Promise<UserData[]
     );
     return res.items ?? res.list ?? [];
   } catch (err) {
-    if (err instanceof ZzError && err.code === "serviceStackNotFound") return null;
+    if (err instanceof ZopsError && err.code === "serviceStackNotFound") return null;
     throw err;
   }
 }
@@ -354,7 +354,7 @@ async function currentObjectStorageSize(ctx: Context, serviceId: string): Promis
     });
     return res.quotaGBytes ?? null;
   } catch (err) {
-    if (err instanceof ZzError && err.exitCode === EXIT.NOT_FOUND) return null;
+    if (err instanceof ZopsError && err.exitCode === EXIT.NOT_FOUND) return null;
     throw err;
   }
 }
@@ -374,7 +374,7 @@ export const applyCommands: CommandSpec[] = [
 
 Nothing is ever deleted, and an existing secret is never overwritten — re-applying a file
 with generated secrets does not rotate them out from under a running app. Use
-\`zz env set\` to change one deliberately.
+\`zops env set\` to change one deliberately.
 
 Run it with --dry-run first: the plan is the same in both modes, only the execution differs.`,
     flags: [
@@ -394,9 +394,9 @@ Run it with --dry-run first: the plan is the same in both modes, only the execut
       },
     ],
     examples: [
-      "zz apply -f zerops-import.yaml --dry-run",
-      "zz apply -f zerops-import.yaml -P mkl-test",
-      "zz apply -f zerops-import.yaml --json",
+      "zops apply -f zerops-import.yaml --dry-run",
+      "zops apply -f zerops-import.yaml -P mkl-test",
+      "zops apply -f zerops-import.yaml --json",
     ],
     operations: [
       "ImportProject",
@@ -444,7 +444,7 @@ Run it with --dry-run first: the plan is the same in both modes, only the execut
       try {
         project = await ctx.resolveProject(target);
       } catch (err) {
-        if (!(err instanceof ZzError) || err.exitCode !== EXIT.NOT_FOUND) throw err;
+        if (!(err instanceof ZopsError) || err.exitCode !== EXIT.NOT_FOUND) throw err;
         if (!declaration.project) {
           throw usage(
             `no project named '${target}' and ${file} has no project: block to create one`,
@@ -573,7 +573,7 @@ Run it with --dry-run first: the plan is the same in both modes, only the execut
       });
 
       if (failures > 0) {
-        throw new ZzError({
+        throw new ZopsError({
           code: "applyIncomplete",
           message: `${failures} of ${convergeable.length} changes could not be applied`,
           exitCode: EXIT.REMOTE_FAILED,

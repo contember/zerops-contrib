@@ -3,7 +3,7 @@
  *
  * Commands declare their interface as data rather than parsing argv themselves. That single
  * declaration drives three things that otherwise drift apart: parsing and validation, the
- * `--help` text, and the machine-readable catalog behind `zz commands --json`.
+ * `--help` text, and the machine-readable catalog behind `zops commands --json`.
  */
 import { usage } from "./errors.ts";
 
@@ -92,7 +92,7 @@ export const GLOBAL_FLAGS: FlagSpec[] = [
     env: "ZEROPS_REGION",
     default: "prg1",
     placeholder: "<region>",
-    description: "API region. Run `zz region list` for the available set.",
+    description: "API region. Run `zops region list` for the available set.",
   },
   {
     name: "wait",

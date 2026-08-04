@@ -21,7 +21,7 @@ async function runCli(args: string[], env: Record<string, string> = {}) {
       ZEROPS_TOKEN: "",
       ZEROPS_PROJECT: "",
       ZEROPS_SERVICE: "",
-      XDG_CONFIG_HOME: "/nonexistent-zz-test-home",
+      XDG_CONFIG_HOME: "/nonexistent-zops-test-home",
       ...env,
     },
   });
@@ -69,7 +69,7 @@ describe("command specs", () => {
   test("help renders for every command", () => {
     for (const command of COMMANDS) {
       const help = renderCommandHelp(command);
-      expect(help).toContain(`zz ${command.path.join(" ")}`);
+      expect(help).toContain(`zops ${command.path.join(" ")}`);
       expect(help).toContain("Global flags:");
     }
     expect(renderRootHelp()).toContain("Exit codes:");
@@ -163,7 +163,7 @@ describe("cli behaviour", () => {
 
   test("a global flag before the command still resolves the command", async () => {
     // Regression: the flag's value used to be mistaken for the command word.
-    const { stderr, exitCode } = await runCli(["--token", "zzbogus", "auth", "status", "--region", "prg1"]);
+    const { stderr, exitCode } = await runCli(["--token", "zopsbogus", "auth", "status", "--region", "prg1"]);
     expect(stderr).not.toContain("unknown command");
     expect(exitCode).not.toBe(2);
   });
@@ -192,7 +192,7 @@ describe("cli behaviour", () => {
     const { stdout, exitCode } = await runCli(["commands", "--json"]);
     expect(exitCode).toBe(0);
     const parsed = JSON.parse(stdout);
-    expect(parsed.tool).toBe("zz");
+    expect(parsed.tool).toBe("zops");
     expect(parsed.commands.length).toBe(COMMANDS.length);
     expect(parsed.exitCodes["8"]).toContain("remote operation");
     expect(parsed.documentedOperationCount).toBe(228);
@@ -201,7 +201,7 @@ describe("cli behaviour", () => {
 
   test("destructive commands refuse to run unattended without --yes", async () => {
     const { stderr, exitCode } = await runCli(["service", "delete", "x"], {
-      ZEROPS_TOKEN: "zzbogus",
+      ZEROPS_TOKEN: "zopsbogus",
       ZEROPS_PROJECT: "p",
     });
     expect(exitCode).not.toBe(0);

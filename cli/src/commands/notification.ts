@@ -36,8 +36,8 @@ Filtering by project or service is done server-side, so it is safe on a busy org
       { name: "for-service", type: "string", placeholder: "<hostname|id>", description: "Restrict to one service." },
     ],
     examples: [
-      "zz notification list --type ERROR",
-      "zz notification list --for-project --limit 50 --json",
+      "zops notification list --type ERROR",
+      "zops notification list --for-project --limit 50 --json",
     ],
     operations: ["ListClientUserNotifications"],
     async run(ctx) {
@@ -73,7 +73,7 @@ Filtering by project or service is done server-side, so it is safe on a busy org
   {
     path: ["notification", "ack"],
     summary: "Acknowledge one notification.",
-    args: [{ name: "notification-id", description: "Notification id (see `zz notification list`).", required: true }],
+    args: [{ name: "notification-id", description: "Notification id (see `zops notification list`).", required: true }],
     operations: ["AcknowledgeUserNotification"],
     async run(ctx, parsed) {
       const id = parsed.args[0]!;
@@ -92,7 +92,7 @@ Filtering by project or service is done server-side, so it is safe on a busy org
       { name: "for-project", type: "boolean", description: "Only notifications of the selected project." },
       { name: "for-service", type: "string", placeholder: "<hostname|id>", description: "Only notifications of one service." },
     ],
-    examples: ["zz notification ack-all --for-project --yes"],
+    examples: ["zops notification ack-all --for-project --yes"],
     operations: ["AcknowledgeAllUserNotifications"],
     async run(ctx) {
       const clientId = await ctx.clientId();

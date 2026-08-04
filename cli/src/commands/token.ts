@@ -56,7 +56,7 @@ export const tokenCommands: CommandSpec[] = [
     path: ["token", "list"],
     summary: "List personal access tokens.",
     description: "Names and creation dates only — the token values themselves are not retrievable.",
-    examples: ["zz token list", "zz token list --json"],
+    examples: ["zops token list", "zops token list --json"],
     operations: ["ListUserTokens"],
     async run(ctx) {
       const res = await ctx.api.call<{ list?: UserToken[]; items?: UserToken[] }>("ListUserTokens");
@@ -73,7 +73,7 @@ export const tokenCommands: CommandSpec[] = [
   {
     path: ["token", "get"],
     summary: "Show one personal access token's metadata.",
-    args: [{ name: "token-id", description: "Token id (see `zz token list`).", required: true }],
+    args: [{ name: "token-id", description: "Token id (see `zops token list`).", required: true }],
     operations: ["GetUserToken"],
     async run(ctx, parsed) {
       ctx.out.data(await ctx.api.call("GetUserToken", { path: { id: parsed.args[0]! } }));
@@ -85,12 +85,12 @@ export const tokenCommands: CommandSpec[] = [
     description: `The value is returned only by this call and never again. With --quiet the token is the only
 thing on stdout, which is the form to pipe into a secret store.
 
-Prefer \`zz token integration create\` for anything unattended: a personal token carries your
+Prefer \`zops token integration create\` for anything unattended: a personal token carries your
 full access and cannot be scoped to one project.`,
     args: [{ name: "name", description: "Label for the token, shown in the GUI.", required: true }],
     examples: [
-      "zz token create ci-pipeline",
-      "zz token create laptop -q | pass insert -e zerops/token",
+      "zops token create ci-pipeline",
+      "zops token create laptop -q | pass insert -e zerops/token",
     ],
     operations: ["CreateUserToken"],
     async run(ctx, parsed) {
@@ -122,7 +122,7 @@ full access and cannot be scoped to one project.`,
     summary: "Revoke a personal access token.",
     destructive: true,
     args: [{ name: "token-id", description: "Token id.", required: true }],
-    examples: ["zz token delete 3mKq8vNwQ1yTbXZs2LpAcd --yes"],
+    examples: ["zops token delete 3mKq8vNwQ1yTbXZs2LpAcd --yes"],
     operations: ["DeleteUserTokenById"],
     async run(ctx, parsed) {
       const id = parsed.args[0]!;
@@ -136,7 +136,7 @@ full access and cannot be scoped to one project.`,
   {
     path: ["token", "integration", "list"],
     summary: "List the organization's integration tokens.",
-    examples: ["zz token integration list --json"],
+    examples: ["zops token integration list --json"],
     operations: ["listIntegrationTokens"],
     async run(ctx) {
       const clientId = await ctx.clientId();
@@ -166,13 +166,13 @@ full access and cannot be scoped to one project.`,
     description: `The recommended credential for CI and agents. Leaving the organization role at NO_ACCESS and
 granting one project explicitly produces a token that can do nothing outside that project:
 
-  zz token integration create ci --project-role myapp=BASIC_USER
+  zops token integration create ci --project-role myapp=BASIC_USER
 
 Roles are tiered — OWNER > ADMIN > BASIC_USER > READ_ONLY > NO_ACCESS — and a project-level role
 overrides the organization-level one. READ_ONLY is enough to read logs and configuration;
 BASIC_USER is the lowest role that can deploy.
 
-Note that such a token cannot list projects organization-wide; \`zz project list\` falls back to
+Note that such a token cannot list projects organization-wide; \`zops project list\` falls back to
 the search endpoint to work around that.`,
     args: [{ name: "name", description: "Label for the token.", required: true }],
     flags: [
@@ -181,8 +181,8 @@ the search endpoint to work around that.`,
       { name: "can-create-projects", type: "boolean", description: "Allow the token to create new projects, owning what it creates." },
     ],
     examples: [
-      "zz token integration create ci --project-role myapp=BASIC_USER",
-      "zz token integration create readonly-audit --project-role myapp=READ_ONLY -q",
+      "zops token integration create ci --project-role myapp=BASIC_USER",
+      "zops token integration create readonly-audit --project-role myapp=READ_ONLY -q",
     ],
     operations: ["createIntegrationToken"],
     async run(ctx, parsed) {
@@ -214,7 +214,7 @@ the search endpoint to work around that.`,
       { name: "project-role", type: "string[]", placeholder: "<project>=<ROLE>", description: "Project grants, replacing the existing set. Repeatable." },
       { name: "can-create-projects", type: "boolean", description: "Allow the token to create new projects." },
     ],
-    examples: ["zz token integration update 3mKq... --project-role myapp=READ_ONLY --yes"],
+    examples: ["zops token integration update 3mKq... --project-role myapp=READ_ONLY --yes"],
     operations: ["listIntegrationTokens", "updateIntegrationToken"],
     async run(ctx, parsed) {
       const id = parsed.args[0]!;

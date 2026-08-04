@@ -311,7 +311,7 @@ run:
 
 **Every timeout here is a Go duration and must carry a unit.** A bare integer is
 rejected by validation — `cannot unmarshal !!int \`60\` into time.Duration` —
-and `zz validate -S <svc> --verbose` is the only place that message is visible.
+and `zops validate -S <svc> --verbose` is the only place that message is visible.
 Verified live on `bun@1.3.9`.
 
 - **`httpGet`** — GET to `localhost:{port}{path}` from inside the container. Success = HTTP `2xx`

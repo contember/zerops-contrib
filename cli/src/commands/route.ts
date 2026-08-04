@@ -29,7 +29,7 @@ async function findHttpRouting(
   );
   const items = res.items ?? res.list ?? [];
   const target = items.find((r) => r.id === ref || r.domains?.some((d) => d.domainName === ref));
-  if (!target) throw notFound(`no HTTP route for '${ref}'`, "Run `zz route http list`.");
+  if (!target) throw notFound(`no HTTP route for '${ref}'`, "Run `zops route http list`.");
   return target;
 }
 
@@ -48,7 +48,7 @@ export const routeCommands: CommandSpec[] = [
   {
     path: ["route", "http", "list"],
     summary: "List HTTP routes (domains) in the project.",
-    examples: ["zz route http list", "zz route http list --json"],
+    examples: ["zops route http list", "zops route http list --json"],
     operations: ["ListProjectPublicHttpRoutings"],
     async run(ctx) {
       const projectId = await ctx.projectId();
@@ -86,8 +86,8 @@ command returns (DNS permitting). Certificates are issued automatically when --s
       { name: "cdn", type: "boolean", description: "Serve through the CDN." },
     ],
     examples: [
-      "zz route http create api.example.com api --port 3000",
-      "zz route http create example.com web --port 80 --no-ssl",
+      "zops route http create api.example.com api --port 3000",
+      "zops route http create example.com web --port 80 --no-ssl",
     ],
     operations: ["CreatePublicHttpRouting", "SyncPublicHttpRouting"],
     async run(ctx, parsed) {
@@ -127,7 +127,7 @@ command returns (DNS permitting). Certificates are issued automatically when --s
 actually points at the balancer, and \`sslStatus\` whether a certificate has been issued — a
 route can be perfectly configured and still fail on either.`,
     args: [{ name: "domain-or-id", description: "Domain name or routing id.", required: true }],
-    examples: ["zz route http get api.example.com", "zz route http get api.example.com --json"],
+    examples: ["zops route http get api.example.com", "zops route http get api.example.com --json"],
     operations: ["ListProjectPublicHttpRoutings", "GetPublicHttpRouting"],
     async run(ctx, parsed) {
       const target = await findHttpRouting(ctx, parsed.args[0]!);
@@ -140,7 +140,7 @@ route can be perfectly configured and still fail on either.`,
     description: `Reads the route and merges, so anything you do not pass is preserved — including the
 per-location settings the API supports but this command does not expose (basic auth, rate
 limiting, redirects, IP access policies). Those survive an update untouched; set them through
-\`zz api UpdatePublicHttpRouting\` if you need them.
+\`zops api UpdatePublicHttpRouting\` if you need them.
 
 --port and --path rewrite the *first* location. A route with several locations is better edited
 through the raw operation, where you can address each one.`,
@@ -157,9 +157,9 @@ through the raw operation, where you can address each one.`,
       { name: "cdn", type: "boolean", description: "Serve through the CDN. Use --no-cdn to disable." },
     ],
     examples: [
-      "zz route http update api.example.com --port 8080 --yes",
-      "zz route http update api.example.com api-v2 --yes",
-      "zz route http update old.example.com --domain new.example.com --yes",
+      "zops route http update api.example.com --port 8080 --yes",
+      "zops route http update api.example.com api-v2 --yes",
+      "zops route http update old.example.com --domain new.example.com --yes",
     ],
     operations: ["ListProjectPublicHttpRoutings", "UpdatePublicHttpRouting", "SyncPublicHttpRouting"],
     async run(ctx, parsed) {
@@ -209,12 +209,12 @@ through the raw operation, where you can address each one.`,
     description: `Certificate issuance waits on the domain resolving to the balancer. After fixing an A or CNAME
 record the platform re-checks on its own schedule; this asks it to look now instead of waiting.
 
-Read the result with \`zz route http get\` — the check is asynchronous and this only queues it.`,
+Read the result with \`zops route http get\` — the check is asynchronous and this only queues it.`,
     args: [
       { name: "domain-or-id", description: "Domain name or routing id.", required: true },
       { name: "domain", description: "Check only this one domain of the route.", required: false },
     ],
-    examples: ["zz route http dns-check api.example.com"],
+    examples: ["zops route http dns-check api.example.com"],
     operations: ["ListProjectPublicHttpRoutings", "TriggerPublicHttpRoutingDomainsDnsCheck"],
     async run(ctx, parsed) {
       const target = await findHttpRouting(ctx, parsed.args[0]!);
@@ -253,7 +253,7 @@ Read the result with \`zz route http get\` — the check is asynchronous and thi
 balancer serving what it already serves — the escape hatch when a half-finished set of changes
 should not go live.`,
     destructive: true,
-    examples: ["zz route http revert --yes"],
+    examples: ["zops route http revert --yes"],
     operations: ["RevertPublicHttpRoutingChanges"],
     async run(ctx) {
       const projectId = await ctx.projectId();
@@ -285,7 +285,7 @@ should not go live.`,
   {
     path: ["route", "http", "sync"],
     summary: "Push staged HTTP routing changes to the balancer.",
-    description: "Only needed after editing routes through the GUI or the raw API; `zz route http create/delete` sync for you.",
+    description: "Only needed after editing routes through the GUI or the raw API; `zops route http create/delete` sync for you.",
     operations: ["SyncPublicHttpRouting"],
     async run(ctx) {
       const projectId = await ctx.projectId();
@@ -323,7 +323,7 @@ should not go live.`,
   {
     path: ["route", "port", "create"],
     summary: "Expose a raw TCP/UDP port.",
-    description: "Requires the project to have a public IPv4 or IPv6 address. Use `zz project get` to check.",
+    description: "Requires the project to have a public IPv4 or IPv6 address. Use `zops project get` to check.",
     args: [{ name: "service", description: "Service hostname or id. Defaults to --service." }],
     flags: [
       { name: "public-port", type: "number", required: true, description: "Port to expose publicly." },
@@ -334,7 +334,7 @@ should not go live.`,
       { name: "firewall-ip-range", type: "string[]", placeholder: "<cidr>", description: "IP range for the firewall rule. Repeatable." },
       { name: "allow-my-ip", type: "boolean", description: "Add the caller's current public IP to the rule." },
     ],
-    examples: ["zz route port create db --public-port 5432 --internal-port 5432 --firewall-policy WHITELIST --allow-my-ip"],
+    examples: ["zops route port create db --public-port 5432 --internal-port 5432 --firewall-policy WHITELIST --allow-my-ip"],
     operations: ["CreatePublicPortRouting", "SyncPublicPortRouting"],
     async run(ctx, parsed) {
       const service = await ctx.service(parsed.args[0]);
@@ -362,7 +362,7 @@ should not go live.`,
   {
     path: ["route", "port", "get"],
     summary: "Show one port route in detail, including its firewall rule.",
-    args: [{ name: "routing-id", description: "Port routing id (see `zz route port list`).", required: true }],
+    args: [{ name: "routing-id", description: "Port routing id (see `zops route port list`).", required: true }],
     operations: ["GetPublicPortRouting"],
     async run(ctx, parsed) {
       ctx.out.data(await ctx.api.call("GetPublicPortRouting", { path: { id: parsed.args[0]! } }));
@@ -386,8 +386,8 @@ whitelist rather than appending to it.`,
       { name: "allow-my-ip", type: "boolean", description: "Add the caller's current public IP to the rule." },
     ],
     examples: [
-      "zz route port update 3mKq... --firewall-policy WHITELIST --allow-my-ip --yes",
-      "zz route port update 3mKq... --internal-port 5433 --yes",
+      "zops route port update 3mKq... --firewall-policy WHITELIST --allow-my-ip --yes",
+      "zops route port update 3mKq... --internal-port 5433 --yes",
     ],
     operations: ["GetPublicPortRouting", "UpdatePublicPortRouting", "SyncPublicPortRouting"],
     async run(ctx, parsed) {
@@ -445,7 +445,7 @@ whitelist rather than appending to it.`,
     path: ["route", "port", "revert"],
     summary: "Discard every staged port routing change in the project.",
     destructive: true,
-    examples: ["zz route port revert --yes"],
+    examples: ["zops route port revert --yes"],
     operations: ["RevertPublicPortRoutingChanges"],
     async run(ctx) {
       const projectId = await ctx.projectId();
@@ -459,7 +459,7 @@ whitelist rather than appending to it.`,
   {
     path: ["route", "port", "sync"],
     summary: "Push staged port routing changes to the balancer.",
-    description: "Only needed after editing port routes through the GUI or the raw API; the `zz route port` commands sync for you.",
+    description: "Only needed after editing port routes through the GUI or the raw API; the `zops route port` commands sync for you.",
     operations: ["SyncPublicPortRouting"],
     async run(ctx) {
       const projectId = await ctx.projectId();
@@ -472,7 +472,7 @@ whitelist rather than appending to it.`,
     path: ["route", "port", "delete"],
     summary: "Remove a raw port route.",
     destructive: true,
-    args: [{ name: "routing-id", description: "Port routing id (see `zz route port list`).", required: true }],
+    args: [{ name: "routing-id", description: "Port routing id (see `zops route port list`).", required: true }],
     operations: ["DeletePublicPortRouting", "SyncPublicPortRouting"],
     async run(ctx, parsed) {
       const id = parsed.args[0]!;

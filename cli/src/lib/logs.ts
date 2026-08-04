@@ -3,10 +3,10 @@
  *
  * The REST API hands out a short-lived, pre-authorized log URL per project; everything after
  * that is filtering. Build logs are ordinary container logs emitted by a throwaway builder
- * service and tagged `zbuilder@<appVersionId>`, which is what makes `zz push` able to show them.
+ * service and tagged `zbuilder@<appVersionId>`, which is what makes `zops push` able to show them.
  */
 import type { Context } from "./context.ts";
-import { ZzError, EXIT } from "./errors.ts";
+import { ZopsError, EXIT } from "./errors.ts";
 
 /** Syslog facilities the platform uses to separate app output from webserver access logs. */
 export const FACILITY = { APPLICATION: 16, WEBSERVER: 17 } as const;
@@ -109,7 +109,7 @@ export class LogClient {
     this.ctx.out.debug(`→ GET ${url.pathname} (logs, scan=${query.scan ?? query.limit ?? 100})`);
     const response = await fetch(url, { headers: { accept: "application/json" } });
     if (!response.ok) {
-      throw new ZzError({
+      throw new ZopsError({
         code: "logReadFailed",
         message: `log query failed: HTTP ${response.status}`,
         exitCode: response.status >= 500 ? EXIT.TRANSIENT : EXIT.ERROR,

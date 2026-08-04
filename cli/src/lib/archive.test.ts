@@ -8,7 +8,7 @@ import { Output } from "./output.ts";
 const out = new Output({ quiet: true });
 
 async function scratch(): Promise<string> {
-  return mkdtemp(join(tmpdir(), "zz-test-"));
+  return mkdtemp(join(tmpdir(), "zops-test-"));
 }
 
 /** Reads the produced archive back with the system tar, i.e. a real third-party parser. */

@@ -33,9 +33,9 @@ setting ZEROPS_TOKEN in the environment over calling this command — it needs n
 directory and leaves no credential on disk.`,
     args: [{ name: "token", description: "Personal access token. Use '-' to read it from stdin.", required: true }],
     examples: [
-      "zz auth login zes1abc...",
-      "cat token.txt | zz auth login -",
-      "ZEROPS_TOKEN=zes1abc... zz service list   # no stored credential",
+      "zops auth login zes1abc...",
+      "cat token.txt | zops auth login -",
+      "ZEROPS_TOKEN=zes1abc... zops service list   # no stored credential",
     ],
     operations: ["GetUserInfo"],
     async run(ctx, parsed) {
@@ -75,7 +75,7 @@ directory and leaves no credential on disk.`,
 the fastest way to diagnose "wrong project" and "unexpected permissions" problems.
 
 Exits 3 when no token is configured or the token is rejected.`,
-    examples: ["zz auth status", "zz auth status --json"],
+    examples: ["zops auth status", "zops auth status --json"],
     operations: ["GetUserInfo"],
     async run(ctx) {
       const info = await whoami(ctx);

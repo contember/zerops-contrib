@@ -18,11 +18,11 @@ export interface StoredConfig {
 
 export interface ResolvedConfig extends StoredConfig {
   apiUrl: string;
-  /** Files that contributed, most-significant last. Reported by `zz auth status`. */
+  /** Files that contributed, most-significant last. Reported by `zops auth status`. */
   sources: string[];
 }
 
-const USER_CONFIG = join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "zz", "config.json");
+const USER_CONFIG = join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "zops", "config.json");
 
 /** `prg1` -> `https://api.app-prg1.zerops.io`. $ZEROPS_API_URL overrides for self-hosted/staging. */
 export function apiUrlForRegion(region: string): string {
@@ -45,7 +45,7 @@ function readJsonish(path: string): Record<string, unknown> | null {
 function findProjectConfig(start: string): { path: string; data: Record<string, unknown> } | null {
   let dir = resolve(start);
   for (;;) {
-    for (const name of [".zz.json", ".zz.yaml", ".zz.yml", ".zcli.yaml", ".zcli.yml"]) {
+    for (const name of [".zops.json", ".zops.yaml", ".zops.yml", ".zcli.yaml", ".zcli.yml"]) {
       const candidate = join(dir, name);
       if (existsSync(candidate)) {
         const data = readJsonish(candidate);

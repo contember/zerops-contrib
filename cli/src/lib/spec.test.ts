@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { parseArgs, parseDuration, GLOBAL_FLAGS, type FlagSpec } from "./spec.ts";
-import { ZzError, EXIT } from "./errors.ts";
+import { ZopsError, EXIT } from "./errors.ts";
 
 const FLAGS: FlagSpec[] = [
   { name: "name", type: "string", description: "" },
@@ -47,11 +47,11 @@ describe("parseArgs", () => {
   });
 
   test("rejects unknown flags rather than silently ignoring them", () => {
-    expect(() => parse(["--nope"])).toThrow(ZzError);
+    expect(() => parse(["--nope"])).toThrow(ZopsError);
     try {
       parse(["--nope"]);
     } catch (err) {
-      expect((err as ZzError).exitCode).toBe(EXIT.USAGE);
+      expect((err as ZopsError).exitCode).toBe(EXIT.USAGE);
     }
   });
 

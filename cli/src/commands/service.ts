@@ -37,7 +37,7 @@ function lifecycle(
     description: options.description,
     destructive: options.destructive,
     args: [{ name: "service", description: "Service hostname or id. Defaults to --service." }],
-    examples: [`zz service ${verb} api`, `zz service ${verb} api --no-wait`],
+    examples: [`zops service ${verb} api`, `zops service ${verb} api --no-wait`],
     operations: [operation],
     async run(ctx, parsed) {
       const service = await ctx.service(parsed.args[0]);
@@ -57,7 +57,7 @@ export const serviceCommands: CommandSpec[] = [
       { name: "status", type: "string", placeholder: "<status>", description: "Only services with this status, e.g. ACTIVE." },
       { name: "type", type: "string", placeholder: "<substring>", description: "Only services whose type contains this substring, e.g. postgres." },
     ],
-    examples: ["zz service list", "zz service list --status ACTIVE --json", "zz service list -q"],
+    examples: ["zops service list", "zops service list --status ACTIVE --json", "zops service list -q"],
     operations: ["ListProjectServiceStacks"],
     async run(ctx) {
       let items = await ctx.listServices();
@@ -87,16 +87,16 @@ export const serviceCommands: CommandSpec[] = [
   {
     path: ["service", "create"],
     summary: "Create a single service without writing an import YAML.",
-    description: `The one-service shortcut past \`zz project service-import\`. For anything with cross-service
+    description: `The one-service shortcut past \`zops project service-import\`. For anything with cross-service
 references, generated secrets or several services at once, write the YAML instead — the
 \`<@generateRandomString(…)>\` expansion and \`\${service_VAR}\` references only exist there.
 
---type takes a full version string from \`zz catalog\`, e.g. postgresql:ha@18 or nodejs@22.
-Runtime services start empty; give them code with \`zz push\`, \`--from-git\`, or
+--type takes a full version string from \`zops catalog\`, e.g. postgresql:ha@18 or nodejs@22.
+Runtime services start empty; give them code with \`zops push\`, \`--from-git\`, or
 --start-without-code for a container you will fill over SSH.`,
     args: [{ name: "name", description: "Service hostname. Lowercase letters and digits only.", required: true }],
     flags: [
-      { name: "type", type: "string", required: true, placeholder: "<type@version>", description: "Service type and version, exactly as `zz catalog` prints it." },
+      { name: "type", type: "string", required: true, placeholder: "<type@version>", description: "Service type and version, exactly as `zops catalog` prints it." },
       { name: "from-git", type: "string", placeholder: "<url>", description: "Build immediately from this Git URL." },
       { name: "start-without-code", type: "boolean", description: "Bring a runtime service up with no application code." },
       { name: "subdomain", type: "boolean", description: "Enable the generated .zerops.app subdomain." },
@@ -107,9 +107,9 @@ Runtime services start empty; give them code with \`zz push\`, \`--from-git\`, o
       { name: "setup", type: "string", placeholder: "<name>", description: "zerops.yaml setup: block to use. Defaults to the service name." },
     ],
     examples: [
-      "zz service create db --type postgresql:ha@18",
-      "zz service create api --type nodejs@22 --from-git https://github.com/acme/api@main --subdomain",
-      "zz service create worker --type ubuntu@24.04 --start-without-code",
+      "zops service create db --type postgresql:ha@18",
+      "zops service create api --type nodejs@22 --from-git https://github.com/acme/api@main --subdomain",
+      "zops service create worker --type ubuntu@24.04 --start-without-code",
     ],
     operations: ["CreateServiceStack"],
     async run(ctx, parsed) {
@@ -157,7 +157,7 @@ first-class API operation — it does not require a stop/start pair.`,
   lifecycle("reload", "ReloadServiceStack", {
     summary: "Reload a service without recreating its containers.",
     description: `Signals the running process to reload its configuration. Note that a reload does NOT re-read
-environment variables — use \`zz service restart\` for that.`,
+environment variables — use \`zops service restart\` for that.`,
   }),
   {
     path: ["service", "delete"],
@@ -176,7 +176,7 @@ environment variables — use \`zz service restart\` for that.`,
   {
     path: ["service", "enable-subdomain"],
     summary: "Enable the generated .zerops.app subdomain.",
-    description: "Intended for development and testing. Production traffic should use a domain via `zz route http`.",
+    description: "Intended for development and testing. Production traffic should use a domain via `zops route http`.",
     args: [{ name: "service", description: "Service hostname or id. Defaults to --service." }],
     operations: ["EnableSubdomainAccess"],
     async run(ctx, parsed) {
@@ -206,7 +206,7 @@ environment variables — use \`zz service restart\` for that.`,
     path: ["service", "export"],
     summary: "Export a service as import YAML.",
     args: [{ name: "service", description: "Service hostname or id. Defaults to --service." }],
-    examples: ["zz service export api > api.yaml"],
+    examples: ["zops service export api > api.yaml"],
     operations: ["ExportServiceStack"],
     async run(ctx, parsed) {
       const service = await ctx.service(parsed.args[0]);
@@ -222,7 +222,7 @@ environment variables — use \`zz service restart\` for that.`,
     path: ["service", "containers"],
     summary: "List the running containers of a service.",
     args: [{ name: "service", description: "Service hostname or id. Defaults to --service." }],
-    examples: ["zz service containers api --json"],
+    examples: ["zops service containers api --json"],
     operations: ["ListServiceStackContainers"],
     async run(ctx, parsed) {
       const service = await ctx.service(parsed.args[0]);
@@ -253,7 +253,7 @@ service restarts as part of this operation.`,
       { name: "storage", description: "Shared-storage service hostname or id.", required: true },
       { name: "service", description: "Service that should mount it. Defaults to --service." },
     ],
-    examples: ["zz service shared-storage connect uploads api"],
+    examples: ["zops service shared-storage connect uploads api"],
     operations: ["ConnectSharedStorage"],
     async run(ctx, parsed) {
       const storage = await ctx.service(parsed.args[0]!);
@@ -298,15 +298,15 @@ to see the filesystem a failing build actually had.
 Both phases are sent on every call: a flag you omit is set to NONE. The API offers no way to
 read the current setting back, so pass both when you want both.
 
-A paused container is billed while it waits. Reset with \`zz service debug --build NONE\`.`,
+A paused container is billed while it waits. Reset with \`zops service debug --build NONE\`.`,
     args: [{ name: "service", description: "Service hostname or id. Defaults to --service." }],
     flags: [
       { name: "build", type: "string", enum: ["NONE", "BEFORE", "ON_FAIL", "AFTER"], default: "NONE", description: "When to pause the build phase." },
       { name: "runtime-prepare", type: "string", enum: ["NONE", "BEFORE", "ON_FAIL", "AFTER"], default: "NONE", description: "When to pause the runtime-prepare phase." },
     ],
     examples: [
-      "zz service debug api --build ON_FAIL",
-      "zz service debug api --build NONE --runtime-prepare NONE   # reset",
+      "zops service debug api --build ON_FAIL",
+      "zops service debug api --build NONE --runtime-prepare NONE   # reset",
     ],
     operations: ["ConfigureDebug"],
     async run(ctx, parsed) {
@@ -329,7 +329,7 @@ A paused container is billed while it waits. Reset with \`zz service debug --bui
     summary: "Print the nginx configuration of a static service.",
     description: "Only static (nginx) services have one. Useful for checking what the platform generated before overriding it in zerops.yaml.",
     args: [{ name: "service", description: "Service hostname or id. Defaults to --service." }],
-    examples: ["zz service nginx-config web"],
+    examples: ["zops service nginx-config web"],
     operations: ["GetNginxConfFile"],
     async run(ctx, parsed) {
       const service = await ctx.service(parsed.args[0]);
@@ -350,7 +350,7 @@ listed and read without a VPN or an SSH session.
 The token expires; re-run to get a fresh one. Treat the output as a credential — anyone holding
 it can read the service's files until it expires.`,
     args: [{ name: "service", description: "Service hostname or id. Defaults to --service." }],
-    examples: ["zz service file-browser api --json"],
+    examples: ["zops service file-browser api --json"],
     operations: ["CreateFileBrowsingAccess"],
     async run(ctx, parsed) {
       const service = await ctx.service(parsed.args[0]);
@@ -367,7 +367,7 @@ it can read the service's files until it expires.`,
     summary: "List the platform-level components backing a service.",
     description: `A service is assembled from internal components — the database engine, its access point, the
 sidecars. This is what the platform tracks for each, including their status and target
-container count. \`zz service containers\` is the more useful view for day-to-day work.`,
+container count. \`zops service containers\` is the more useful view for day-to-day work.`,
     args: [{ name: "service", description: "Service hostname or id. Defaults to --service." }],
     flags: [{ name: "limit", type: "number", default: 100, description: "How many components to return." }],
     operations: ["ListServiceStackServices"],
@@ -398,7 +398,7 @@ zerops.yaml to bake a runtime image, instead of reusing the base one — worth f
 system package was added and the cached runtime no longer matches.`,
     args: [{ name: "service", description: "Service hostname or id. Defaults to --service." }],
     flags: [{ name: "custom-runtime", type: "boolean", default: true, description: "Prepare a custom runtime. Use --no-custom-runtime to reuse the base image." }],
-    examples: ["zz service next-version api --custom-runtime"],
+    examples: ["zops service next-version api --custom-runtime"],
     operations: ["SetNextAppVersion"],
     async run(ctx, parsed) {
       const service = await ctx.service(parsed.args[0]);

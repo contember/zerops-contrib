@@ -9,13 +9,13 @@ Three tools, three places:
 - **`zcp`** — an MCP server scoped to **one project**, for coding agents. Covers most of what
   `zcli` cannot do (restart, scaling, env writes, events, verification). See
   [`zcp-mcp.md`](zcp-mcp.md).
-- **`zz`** — a from-scratch CLI in this repository (`cli/`) generated from the API's OpenAPI
+- **`zops`** — a from-scratch CLI in this repository (`cli/`) generated from the API's OpenAPI
   document, so all 228 documented operations are reachable, plus the 17 undocumented `/search`
   endpoints `zcli` uses internally. Designed for agents: `--json` everywhere, meaningful exit
-  codes, name-based addressing, waits for async operations. See [`zz-cli.md`](zz-cli.md).
+  codes, name-based addressing, waits for async operations. See [`zops-cli.md`](zops-cli.md).
 
-All four authenticate with the same personal access token. Only `zz` has a raw REST passthrough
-(`zz api`).
+All four authenticate with the same personal access token. Only `zops` has a raw REST passthrough
+(`zops api`).
 
 ## Contents
 
@@ -194,34 +194,34 @@ curl -fsSL https://raw.githubusercontent.com/zeropsio/zcli/main/install.sh | sh 
 
 ## What `zcli` cannot do
 
-A large part of day-2 management has no `zcli` command. Do not invent one — reach for `zz`
-([`zz-cli.md`](zz-cli.md)), `zcp`, the GUI, or the REST API instead.
+A large part of day-2 management has no `zcli` command. Do not invent one — reach for `zops`
+([`zops-cli.md`](zops-cli.md)), `zcp`, the GUI, or the REST API instead.
 
-| Task | `zz` | Other surfaces |
+| Task | `zops` | Other surfaces |
 |---|---|---|
-| Restart a service | `zz service restart` | `zcp` `zerops_manage`, GUI (Restart), or `zcli service stop` + `start` |
-| Reload a service | `zz service reload` | `zcp` `zerops_manage`, or GUI. Note a reload does **not** re-read environment variables |
-| Change scaling / CPU mode / container count | `zz scale set` | `zcp` `zerops_scale`, GUI → **Automatic scaling configuration**, or REST |
-| Set or read env vars beyond `zcli project env` | `zz env set` / `zz env show` | `zcp` `zerops_env`, GUI, or REST `/user-data`, `/project-env` |
-| Read service events, deploy history | `zz process list`, `zz version list` | `zcp` `zerops_events`, GUI, or REST |
+| Restart a service | `zops service restart` | `zcp` `zerops_manage`, GUI (Restart), or `zcli service stop` + `start` |
+| Reload a service | `zops service reload` | `zcp` `zerops_manage`, or GUI. Note a reload does **not** re-read environment variables |
+| Change scaling / CPU mode / container count | `zops scale set` | `zcp` `zerops_scale`, GUI → **Automatic scaling configuration**, or REST |
+| Set or read env vars beyond `zcli project env` | `zops env set` / `zops env show` | `zcp` `zerops_env`, GUI, or REST `/user-data`, `/project-env` |
+| Read service events, deploy history | `zops process list`, `zops version list` | `zcp` `zerops_events`, GUI, or REST |
 | Health / HTTP readiness probe | — | `zcp` `zerops_verify` |
-| Export a project or service as YAML | `zz project export`, `zz service export` | `zcp` `zerops_export`, or GUI three-dot menu |
-| Roll back (activate an archived app version) | `zz version rollback` | GUI → *Pipelines & CI/CD settings*, or REST `/app-version` |
-| Read appVersion status, build/deploy state | `zz version list/get` | GUI, or REST `/app-version` |
-| Configure domains, ports, firewall rules | `zz route http/port` | GUI, or REST `/public-http-routing`, `/public-port-routing` |
-| Backups — create, list, tag, retention, download | `zz backup …` | GUI → **Backups List & Configuration**, or REST. `zsc backup-create <stackName>` creates one from inside a container, untagged |
-| L7 balancer configuration | `zz project balancer get/set` | GUI → **Advanced balancer configuration** |
-| Build on push from GitHub/GitLab | `zz repo connect` | GUI → *Pipelines & CI/CD settings*. Needs an OAuth grant made in the GUI first |
-| Create one service without an import YAML | `zz service create` | GUI → **Add service**, or REST `/service-stack` |
-| Object-storage CDN — enable, disable, purge | `zz cdn storage …` | GUI → the bucket's CDN panel |
-| Access tokens — create, rotate, revoke | `zz token …` | GUI → Settings → **Access Token Management** |
-| Upgrade the project core to HA | `zz project mode SERIOUS` | GUI → project settings. One-way |
-| Dedicated / shared public IPv4 | `zz project ipv4 …` | GUI → project settings |
-| Remote log forwarding, Prometheus scrape targets | `zz project logging`, `zz project prometheus` | GUI → project settings |
-| Pause a build for inspection over SSH | `zz service debug` | GUI → *Pipelines & CI/CD settings* |
-| Platform notifications | `zz notification list` | GUI → the bell |
+| Export a project or service as YAML | `zops project export`, `zops service export` | `zcp` `zerops_export`, or GUI three-dot menu |
+| Roll back (activate an archived app version) | `zops version rollback` | GUI → *Pipelines & CI/CD settings*, or REST `/app-version` |
+| Read appVersion status, build/deploy state | `zops version list/get` | GUI, or REST `/app-version` |
+| Configure domains, ports, firewall rules | `zops route http/port` | GUI, or REST `/public-http-routing`, `/public-port-routing` |
+| Backups — create, list, tag, retention, download | `zops backup …` | GUI → **Backups List & Configuration**, or REST. `zsc backup-create <stackName>` creates one from inside a container, untagged |
+| L7 balancer configuration | `zops project balancer get/set` | GUI → **Advanced balancer configuration** |
+| Build on push from GitHub/GitLab | `zops repo connect` | GUI → *Pipelines & CI/CD settings*. Needs an OAuth grant made in the GUI first |
+| Create one service without an import YAML | `zops service create` | GUI → **Add service**, or REST `/service-stack` |
+| Object-storage CDN — enable, disable, purge | `zops cdn storage …` | GUI → the bucket's CDN panel |
+| Access tokens — create, rotate, revoke | `zops token …` | GUI → Settings → **Access Token Management** |
+| Upgrade the project core to HA | `zops project mode SERIOUS` | GUI → project settings. One-way |
+| Dedicated / shared public IPv4 | `zops project ipv4 …` | GUI → project settings |
+| Remote log forwarding, Prometheus scrape targets | `zops project logging`, `zops project prometheus` | GUI → project settings |
+| Pause a build for inspection over SSH | `zops service debug` | GUI → *Pipelines & CI/CD settings* |
+| Platform notifications | `zops notification list` | GUI → the bell |
 
-Every row is reachable from `zz`, because it wraps the REST API rather than a curated subset.
+Every row is reachable from `zops`, because it wraps the REST API rather than a curated subset.
 Restoring a backup is still GUI-only — the API exposes creation, tagging, retention and a
 download URL, but no restore endpoint.
 
@@ -282,8 +282,8 @@ environment variables come back as `REDACTED`.
 ### Integration tokens
 
 Created at GUI → Settings → **Access Token Management**, or headlessly with
-`zz token integration create <name> --project-role <project>=<ROLE>` (see
-[`zz-cli.md`](zz-cli.md)) — which needs an organization-scoped token itself, so it bootstraps
+`zops token integration create <name> --project-role <project>=<ROLE>` (see
+[`zops-cli.md`](zops-cli.md)) — which needs an organization-scoped token itself, so it bootstraps
 per-project tokens rather than replacing the first one. Three shapes:
 
 | Shape | Reach |

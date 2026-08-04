@@ -2,7 +2,7 @@
 /**
  * Generates the low-level operation index from the vendored OpenAPI document.
  *
- * The whole point of `zz` is that every one of the API's operations is reachable, so the
+ * The whole point of `zops` is that every one of the API's operations is reachable, so the
  * index is derived mechanically rather than hand-listed — `bun run generate` after dropping
  * in a newer `openapi.yml` is the entire upgrade path.
  */

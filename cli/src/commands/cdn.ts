@@ -1,7 +1,7 @@
 /**
  * CDN, which is two separate features sharing a name.
  *
- *   static   the L7 balancer caching a routed domain. Enabled per route (`zz route http create
+ *   static   the L7 balancer caching a routed domain. Enabled per route (`zops route http create
  *            --cdn`), purged per domain and path.
  *   storage  an object-storage bucket published through the CDN. Enabled on the service, purged
  *            by object path.
@@ -20,7 +20,7 @@ export const cdnCommands: CommandSpec[] = [
       { name: "domain", description: "Domain whose cache should be purged.", required: true },
       { name: "path", description: "Path or pattern to invalidate, e.g. /* or /images/.", required: false },
     ],
-    examples: ["zz cdn purge example.com '/*'", "zz cdn purge example.com /images/"],
+    examples: ["zops cdn purge example.com '/*'", "zops cdn purge example.com /images/"],
     operations: ["PurgeStaticCdn"],
     async run(ctx, parsed) {
       const domain = parsed.args[0]!;
@@ -36,9 +36,9 @@ export const cdnCommands: CommandSpec[] = [
     summary: "Publish an object-storage bucket through the CDN.",
     description: `Only object-storage services accept this. Once enabled, objects are served from the CDN edge
 rather than directly from the bucket, so a changed object keeps serving its old body until
-\`zz cdn storage purge\` runs.`,
+\`zops cdn storage purge\` runs.`,
     args: [{ name: "service", description: "Object-storage service hostname or id. Defaults to --service." }],
-    examples: ["zz cdn storage enable assets"],
+    examples: ["zops cdn storage enable assets"],
     operations: ["EnableStorageCdn"],
     async run(ctx, parsed) {
       const service = await ctx.service(parsed.args[0]);
@@ -69,7 +69,7 @@ rather than directly from the bucket, so a changed object keeps serving its old 
       { name: "path", description: "Object path or prefix, e.g. images/ or '*'.", required: true },
       { name: "service", description: "Object-storage service hostname or id. Defaults to --service." },
     ],
-    examples: ["zz cdn storage purge 'images/' assets", "zz cdn storage purge '*' assets"],
+    examples: ["zops cdn storage purge 'images/' assets", "zops cdn storage purge '*' assets"],
     operations: ["PurgeStorageCdn"],
     async run(ctx, parsed) {
       const path = parsed.args[0]!;

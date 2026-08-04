@@ -1,10 +1,10 @@
 {
-  "name": "@zerops-skill/zz",
+  "name": "@zerops-skill/zops",
   "version": "0.1.0",
   "description": "Agent-first CLI for the Zerops API — complete coverage of the public REST surface",
   "type": "module",
   "bin": {
-    "zz": "./src/index.ts"
+    "zops": "./src/index.ts"
   },
   "files": [
     "src",
@@ -12,7 +12,7 @@
   ],
   "scripts": {
     "generate": "bun run scripts/generate.ts",
-    "build": "bun build --compile --minify --outfile dist/zz src/index.ts",
+    "build": "bun build --compile --minify --outfile dist/zops src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test"
   },

@@ -82,10 +82,10 @@ export const apiCommands: CommandSpec[] = [
     description: `Complete access to every operation in the API, generated from its OpenAPI document. Use this
 when no curated command covers what you need.
 
-  zz api --list                        every operation
-  zz api --list --tag ServiceStack     operations in one group
-  zz api --describe <operationId>      parameters, body schema, response schema
-  zz api <operationId> [--param k=v]   invoke
+  zops api --list                        every operation
+  zops api --list --tag ServiceStack     operations in one group
+  zops api --describe <operationId>      parameters, body schema, response schema
+  zops api <operationId> [--param k=v]   invoke
 
 Path and query parameters are passed with --param. The values @project, @service and @client
 resolve from the current context, so you rarely need to paste ids.
@@ -93,7 +93,7 @@ resolve from the current context, so you rarely need to paste ids.
 Request bodies come from --body (inline JSON), --body-file, or --body - for stdin.
 
 Operations that start a background job return a process object; pass --follow-process to wait
-for it, or hand the id to \`zz process wait\`.`,
+for it, or hand the id to \`zops process wait\`.`,
     args: [{ name: "operation-id", description: "Operation to call, e.g. RestartServiceStack. Case-insensitive." }],
     flags: [
       { name: "list", type: "boolean", description: "List operations instead of calling one." },
@@ -106,11 +106,11 @@ for it, or hand the id to \`zz process wait\`.`,
       { name: "follow-process", type: "boolean", description: "If the response is a process, wait for it to finish." },
     ],
     examples: [
-      "zz api --list --tag ServiceStack",
-      "zz api --describe ConfigureAutoscaling",
-      "zz api GetProjectDetails --param id=@project",
-      "zz api RestartServiceStack --param id=@service --follow-process",
-      "zz api ConfigurePrometheus --param id=@project --body '{\"retention\":30}'",
+      "zops api --list --tag ServiceStack",
+      "zops api --describe ConfigureAutoscaling",
+      "zops api GetProjectDetails --param id=@project",
+      "zops api RestartServiceStack --param id=@service --follow-process",
+      "zops api ConfigurePrometheus --param id=@project --body '{\"retention\":30}'",
     ],
     operations: [],
     async run(ctx, parsed) {
@@ -119,7 +119,7 @@ for it, or hand the id to \`zz process wait\`.`,
       if (describeId) {
         const op = findOperation(describeId);
         if (!op) {
-          throw usage(`unknown operation '${describeId}'`, "Run `zz api --list` to see them all.");
+          throw usage(`unknown operation '${describeId}'`, "Run `zops api --list` to see them all.");
         }
         const detail = describe(op);
         if (op.body) detail.bodySchemaExpanded = await expandSchema(op.body);
@@ -172,7 +172,7 @@ for it, or hand the id to \`zz process wait\`.`,
           `unknown operation '${parsed.args[0]}'`,
           near.length
             ? `Did you mean: ${near.map((o) => o.id).join(", ")}?`
-            : "Run `zz api --list` to see every operation.",
+            : "Run `zops api --list` to see every operation.",
         );
       }
 
@@ -195,7 +195,7 @@ for it, or hand the id to \`zz process wait\`.`,
               .join(" ");
             throw usage(
               `${op.id} needs path parameter '${param.name}'`,
-              `Usage: zz api ${op.id} ${expected}\nRun \`zz api --describe ${op.id}\` for the full signature.`,
+              `Usage: zops api ${op.id} ${expected}\nRun \`zops api --describe ${op.id}\` for the full signature.`,
             );
           }
           continue;

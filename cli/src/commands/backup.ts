@@ -45,7 +45,7 @@ export const backupCommands: CommandSpec[] = [
     path: ["backup", "list"],
     summary: "List a service's backups.",
     args: [{ name: "service", description: "Service hostname or id. Defaults to --service." }],
-    examples: ["zz backup list db", "zz backup list db --json"],
+    examples: ["zops backup list db", "zops backup list db --json"],
     operations: ["ListBackups"],
     async run(ctx, parsed) {
       const service = await ctx.service(parsed.args[0]);
@@ -71,7 +71,7 @@ returns as soon as the backup is triggered; \`async: true\` means it took longer
 seconds and is still running in the background.`,
     args: [{ name: "service", description: "Service hostname or id. Defaults to --service." }],
     flags: [{ name: "tag", type: "string[]", placeholder: "<tag>", description: "Tag to attach. Repeatable. Protected tags are exempt from retention pruning." }],
-    examples: ["zz backup create db", "zz backup create db --tag pre-migration --tag protected"],
+    examples: ["zops backup create db", "zops backup create db --tag pre-migration --tag protected"],
     operations: ["BackupServiceStack"],
     async run(ctx, parsed) {
       const service = await ctx.service(parsed.args[0]);
@@ -89,11 +89,11 @@ seconds and is still running in the background.`,
     path: ["backup", "tag"],
     summary: "Replace the tags on an existing backup.",
     args: [
-      { name: "date", description: "Backup name, i.e. its date (see `zz backup list`).", required: true },
+      { name: "date", description: "Backup name, i.e. its date (see `zops backup list`).", required: true },
       { name: "service", description: "Service hostname or id. Defaults to --service." },
     ],
     flags: [{ name: "tag", type: "string[]", placeholder: "<tag>", description: "Tag to set. Repeatable. Passing none clears all tags." }],
-    examples: ['zz backup tag "2026-07-01 09:00:06" db --tag protected'],
+    examples: ['zops backup tag "2026-07-01 09:00:06" db --tag protected'],
     operations: ["UpdateBackup"],
     async run(ctx, parsed) {
       const date = parsed.args[0]!;
@@ -109,10 +109,10 @@ seconds and is still running in the background.`,
     path: ["backup", "download-url"],
     summary: "Create a temporary download URL for a backup.",
     args: [
-      { name: "date", description: "Backup name, i.e. its date (see `zz backup list`).", required: true },
+      { name: "date", description: "Backup name, i.e. its date (see `zops backup list`).", required: true },
       { name: "service", description: "Service hostname or id. Defaults to --service." },
     ],
-    examples: ['curl -o dump.tar.gz "$(zz backup download-url "2026-07-01 09:00:06" db -q)"'],
+    examples: ['curl -o dump.tar.gz "$(zops backup download-url "2026-07-01 09:00:06" db -q)"'],
     operations: ["CreateDownloadBackupUrl"],
     async run(ctx, parsed) {
       const date = parsed.args[0]!;
@@ -135,7 +135,7 @@ seconds and is still running in the background.`,
     summary: "Delete a backup.",
     destructive: true,
     args: [
-      { name: "date", description: "Backup name, i.e. its date (see `zz backup list`).", required: true },
+      { name: "date", description: "Backup name, i.e. its date (see `zops backup list`).", required: true },
       { name: "service", description: "Service hostname or id. Defaults to --service." },
     ],
     operations: ["DeleteBackup"],
@@ -167,7 +167,7 @@ so the command reads the existing policy and merges your changes into it.`,
       { name: "max-monthly", type: "number", description: "Maximum monthly backups to keep." },
       { name: "protected-tag", type: "string[]", placeholder: "<tag>", description: "Tag exempt from automatic deletion. Repeatable; replaces the existing set." },
     ],
-    examples: ["zz backup config db", "zz backup config db --period daily --max-total-files 30"],
+    examples: ["zops backup config db", "zops backup config db --period daily --max-total-files 30"],
     operations: ["ListBackups", "ConfigureBackup"],
     async run(ctx, parsed) {
       const service = await ctx.service(parsed.args[0]);

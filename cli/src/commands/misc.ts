@@ -39,9 +39,9 @@ postgresql:16 or postgres@18.`,
       { name: "category", type: "string", placeholder: "<category>", description: "Filter by category, e.g. USER or DB." },
     ],
     examples: [
-      "zz catalog",
-      "zz catalog --search postgres",
-      "zz catalog --json | jq -r '.[].versions[]'",
+      "zops catalog",
+      "zops catalog --search postgres",
+      "zops catalog --json | jq -r '.[].versions[]'",
     ],
     operations: ["GetSettings"],
     async run(ctx) {
@@ -88,14 +88,14 @@ Needs a target service, because validation depends on the service's type and ver
       { name: "setup", type: "string", placeholder: "<name>", description: "Which setup: block to validate. Defaults to the service hostname." },
       { name: "operation", type: "string", enum: ["DEPLOY", "BUILD_AND_DEPLOY"], default: "BUILD_AND_DEPLOY", description: "Which pipeline the file will drive." },
     ],
-    examples: ["zz validate -S api", "zz validate ./apps/web/zerops.yaml -S web --setup web"],
+    examples: ["zops validate -S api", "zops validate ./apps/web/zerops.yaml -S web --setup web"],
     operations: ["ValidateZeropsYaml"],
     async run(ctx, parsed) {
       const path = parsed.args[0]
         ? resolve(parsed.args[0])
         : ["zerops.yaml", "zerops.yml"].map((n) => join(process.cwd(), n)).find((p) => existsSync(p));
       if (!path || !existsSync(path)) {
-        throw usage("no zerops.yaml found", "Pass the path explicitly: `zz validate path/to/zerops.yaml`.");
+        throw usage("no zerops.yaml found", "Pass the path explicitly: `zops validate path/to/zerops.yaml`.");
       }
 
       const yamlText = await readFile(path, "utf8");
@@ -122,7 +122,7 @@ Needs a target service, because validation depends on the service's type and ver
     summary: "One-shot snapshot of the project: services, health, versions, routes.",
     description: `Everything an agent needs to orient itself, in a single command. Useful as the first call in
 a session and as the check after a deploy.`,
-    examples: ["zz status", "zz status --json"],
+    examples: ["zops status", "zops status --json"],
     operations: ["GetProjectDetails", "ListProjectServiceStacks", "ListProjectPublicHttpRoutings", "ListProjectProcesses"],
     async run(ctx) {
       const project = await ctx.project();
@@ -194,7 +194,7 @@ therefore always current. Two uses:
   - point an editor at it (\`yaml.schemas\` in VS Code) to get completion and inline errors
   - hand it to an agent that is about to write one of these files, instead of letting it guess
 
-\`zz validate\` remains the stronger check for zerops.yaml, because it also resolves the target
+\`zops validate\` remains the stronger check for zerops.yaml, because it also resolves the target
 service's type and version. The schema catches shape errors without a service.`,
     args: [
       {
@@ -204,8 +204,8 @@ service's type and version. The schema catches shape errors without a service.`,
       },
     ],
     examples: [
-      "zz schema zerops > zerops-schema.json",
-      "zz schema import | jq '.properties.services'",
+      "zops schema zerops > zerops-schema.json",
+      "zops schema import | jq '.properties.services'",
     ],
     operations: ["GetZeropsYamlJsonSchema", "GetImportProjectYamlJsonSchema"],
     async run(ctx, parsed) {

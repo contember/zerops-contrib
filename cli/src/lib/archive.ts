@@ -11,7 +11,7 @@ import { lstat, mkdtemp, readdir, readFile, readlink, rm, stat } from "node:fs/p
 import { Readable } from "node:stream";
 import { join, relative, sep } from "node:path";
 import { tmpdir } from "node:os";
-import { usage, ZzError, EXIT } from "./errors.ts";
+import { usage, ZopsError, EXIT } from "./errors.ts";
 import type { Output } from "./output.ts";
 
 const BLOCK = 512;
@@ -32,7 +32,7 @@ export interface PackOptions {
   /** Include the `.git` directory in the artifact. */
   includeGitFolder: boolean;
   /**
-   * Explicit files/directories to archive, relative to `workingDir`. Set by `zz deploy` to ship
+   * Explicit files/directories to archive, relative to `workingDir`. Set by `zops deploy` to ship
    * prebuilt artifacts; when present, git and directory discovery are bypassed entirely.
    */
   include?: string[];
@@ -171,7 +171,7 @@ class TarWriter {
     }
 
     if (!info.isFile()) {
-      throw new ZzError({
+      throw new ZopsError({
         code: "unsupportedFileType",
         message: `cannot archive ${entry.archivePath}: not a regular file, directory or symlink`,
         exitCode: EXIT.ERROR,
@@ -330,7 +330,7 @@ export function ancestorDirectories(paths: readonly string[]): string[] {
 
 export async function packArtifact(options: PackOptions): Promise<PackResult> {
   const { workingDir, out } = options;
-  const dir = await mkdtemp(join(tmpdir(), "zz-pack-"));
+  const dir = await mkdtemp(join(tmpdir(), "zops-pack-"));
   const tarPath = join(dir, "artifact.tar");
   const cleanup = () => rm(dir, { recursive: true, force: true });
 
@@ -375,7 +375,7 @@ export async function packArtifact(options: PackOptions): Promise<PackResult> {
     const ignorer = await loadIgnorer(workingDir);
     let paths: string[];
     if (explicit.length > 0) {
-      // `zz deploy ./dist ./package.json`: each entry is taken verbatim, expanding directories.
+      // `zops deploy ./dist ./package.json`: each entry is taken verbatim, expanding directories.
       // Paths keep their names relative to workingDir so the artifact mirrors the repo layout.
       const collected: string[] = [];
       for (const entry of explicit) {
