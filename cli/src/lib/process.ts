@@ -77,16 +77,54 @@ export async function waitForProcess(
   }
 }
 
+/** A mutation's response in either shape the API uses: a bare process, or one nested under `process`. */
+export interface ProcessResponse {
+  id?: string;
+  actionName?: string;
+  process?: { id?: string; actionName?: string } | null;
+}
+
+/**
+ * Pulls the process out of a mutation response.
+ *
+ * The spec labels some endpoints `ResponseProcess` (flat) and others `ResponseProcessNil`
+ * (`{process}`, possibly absent), and the two are not reliably distinguishable from the document
+ * alone. Accepting both removes a whole class of "missing path parameter 'id'".
+ *
+ * The nested form is checked first and that order matters: `CreateServiceStack` answers with the
+ * new *service* — its own `id` — alongside the process that provisions it, so preferring the
+ * flat `id` would wait on the service id and never find a process.
+ */
+export function extractProcess(
+  response: ProcessResponse | null | undefined,
+): { id: string; actionName?: string } | null {
+  if (!response || typeof response !== "object") return null;
+  if ("process" in response) {
+    const nested = response.process;
+    return nested && typeof nested.id === "string" ? { id: nested.id, actionName: nested.actionName } : null;
+  }
+  return typeof response.id === "string" ? { id: response.id, actionName: response.actionName } : null;
+}
+
 /**
  * Shared tail for commands that trigger a process: honours --no-wait and --json, and returns
  * the payload the command should print.
+ *
+ * A response carrying no process means the change applied synchronously — reported as finished
+ * rather than treated as an error, because for the caller it is done either way.
  */
 export async function settleProcess(
   ctx: Context,
-  process: { id: string; actionName?: string },
+  response: ProcessResponse | null | undefined,
   description: string,
   options: WaitOptions = {},
 ): Promise<Record<string, unknown>> {
+  const process = extractProcess(response);
+  if (!process) {
+    ctx.out.step(`${description} — applied immediately`);
+    return { processId: null, status: PROCESS_SUCCESS, waited: false };
+  }
+
   if (!ctx.wait) {
     ctx.out.info(`${description} started (process ${process.id}); not waiting`);
     return { processId: process.id, status: "PENDING", waited: false };

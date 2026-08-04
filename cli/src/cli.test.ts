@@ -4,6 +4,7 @@ import { renderCommandHelp, renderRootHelp } from "./cli.ts";
 import { GLOBAL_FLAGS } from "./lib/spec.ts";
 import { OPERATIONS, findOperation } from "./lib/operations.ts";
 import { ApiClient } from "./lib/http.ts";
+import { extractProcess } from "./lib/process.ts";
 
 /**
  * Runs the CLI in a subprocess so exit codes and the stdout/stderr split are observed exactly
@@ -85,6 +86,28 @@ describe("generated operations", () => {
     // These two differ only by case and are different endpoints; exact casing must win.
     expect(findOperation("getUserInfo")?.path).toBe("/api/rest/public/auth/info");
     expect(findOperation("GetUserInfo")?.path).toBe("/api/rest/public/user/info");
+  });
+});
+
+describe("process extraction", () => {
+  test("reads the flat ResponseProcess shape", () => {
+    expect(extractProcess({ id: "p1", actionName: "restart" })).toEqual({ id: "p1", actionName: "restart" });
+  });
+
+  test("reads the nested ResponseProcessNil shape", () => {
+    expect(extractProcess({ process: { id: "p2" } })).toEqual({ id: "p2", actionName: undefined });
+  });
+
+  test("prefers the nested process over a sibling id", () => {
+    // CreateServiceStack answers with the new service's own id alongside the provisioning
+    // process; waiting on the service id would never find a process.
+    expect(extractProcess({ id: "serviceId", process: { id: "p3" } })?.id).toBe("p3");
+  });
+
+  test("treats a missing process as work that already finished", () => {
+    expect(extractProcess({ process: null })).toBeNull();
+    expect(extractProcess(undefined)).toBeNull();
+    expect(extractProcess({})).toBeNull();
   });
 });
 
