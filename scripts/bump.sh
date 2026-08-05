@@ -141,7 +141,7 @@ for path in paths:
 PY
 
 echo "==> running the test suite"
-(cd cli && bun test >/dev/null) || {
+(cd cli && bun test) || {
   echo "error: tests failed; reverting" >&2
   git checkout -- "$PLUGIN" "$PKG" "$SRC"
   exit 1
