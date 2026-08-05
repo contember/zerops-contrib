@@ -66,7 +66,7 @@ jobs:
 
       # bin/zops and install.sh are the two entry points a user hits before anything else runs.
       - name: Shell scripts are clean
-        run: shellcheck bin/zops scripts/install.sh scripts/sync-docs.sh
+        run: shellcheck bin/zops scripts/install.sh scripts/sync-docs.sh scripts/bump.sh
 
   docs:
     runs-on: ubuntu-latest

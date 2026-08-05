@@ -106,9 +106,17 @@ bun run typecheck
 bun run generate    # rebuild the operation index after replacing openapi.yml
 ```
 
-Releasing means bumping the version in three places — `.claude-plugin/plugin.json`,
-`cli/package.json` and `VERSION` in `cli/src/cli.ts`. None derives from another, so a test fails
-when they drift; `/plugin update` keys off the first one.
+Releasing is one command. It bumps the three files that carry the version, runs the tests,
+commits and tags:
+
+```sh
+scripts/bump.sh patch            # or minor, major, or an exact 0.4.2
+scripts/bump.sh minor --push     # ...and push, which starts the release build
+```
+
+Pushing the tag is what publishes: CI cross-compiles Linux and macOS on x64 and arm64, smoke-tests
+the result and creates the GitHub release. It refuses if the tag disagrees with
+`.claude-plugin/plugin.json` — that field is what `/plugin update` reads.
 
 The service version tables in `skills/zerops/references/service-catalog.md` are machine-written
 from [zeropsio/docs](https://github.com/zeropsio/docs):
