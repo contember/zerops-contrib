@@ -47,6 +47,7 @@ the same underlying version.
 | Reverse proxy / custom webserver | `nginx` | |
 | Pre-built container image | `docker` | Runs in a **VM**; no autoscaling; needs `--network=host` |
 | Plain Linux box | `alpine` / `ubuntu` | Full autoscaling, same as runtimes |
+| Sandboxes for AI agents | Box Workspace (`zbox@1`) | One VM hosting Firecracker microVMs; managed via `zbox`, not `zerops.yaml`. See [`zbox.md`](zbox.md) |
 
 ### Runtime base OS
 

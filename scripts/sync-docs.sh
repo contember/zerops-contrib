@@ -108,6 +108,23 @@ UPSTREAM_SOURCES=(
   "apps/docs/content/php/how-to/build-pipeline.mdx|references/zerops-yaml.md"
   "apps/docs/content/nodejs/how-to/build-pipeline.mdx|references/zerops-yaml.md"
   "apps/docs/content/guides/php-tuning.mdx|references/zerops-yaml.md"
+  "apps/docs/content/zbox/overview.mdx|references/zbox.md"
+  "apps/docs/content/zbox/getting-started.mdx|references/zbox.md"
+  "apps/docs/content/zbox/workspace-service.mdx|references/zbox.md"
+  "apps/docs/content/zbox/workspace-settings.mdx|references/zbox.md"
+  "apps/docs/content/zbox/access.mdx|references/zbox.md"
+  "apps/docs/content/zbox/lifecycle.mdx|references/zbox.md"
+  "apps/docs/content/zbox/commands.mdx|references/zbox.md"
+  "apps/docs/content/zbox/networking.mdx|references/zbox.md"
+  "apps/docs/content/zbox/secrets.mdx|references/zbox.md"
+  "apps/docs/content/zbox/connectors.mdx|references/zbox.md"
+  "apps/docs/content/zbox/images.mdx|references/zbox.md"
+  "apps/docs/content/zbox/monitoring.mdx|references/zbox.md"
+  "apps/docs/content/zbox/isolation.mdx|references/zbox.md"
+  "apps/docs/content/zbox/lineages.mdx|references/zbox.md"
+  "apps/docs/content/zbox/docker.mdx|references/zbox.md"
+  "apps/docs/content/zbox/faq.mdx|references/zbox.md"
+  "apps/docs/content/zbox/pricing.mdx|references/zbox.md"
 )
 
 # ---------------------------------------------------------------- fetch upstream
@@ -232,6 +249,7 @@ table("Runtimes", [
 table("Static, containers and VMs", [
     ("nginx", imp("nginx")), ("static", imp("static")),
     ("Alpine", imp("alpine")), ("Ubuntu", imp("ubuntu")), ("Docker", imp("docker")),
+    ("Box Workspace", imp("zbox")),
 ])
 
 table("Databases", [
@@ -268,7 +286,7 @@ KNOWN = {
     "bun", "deno", "elixir", "gleam", "java", "nginx", "static", "docker",
     "mariadb", "postgresql", "keydb", "valkey", "qdrant", "nats", "kafka",
     "elasticsearch", "meilisearch", "typesense", "rabbitmq", "clickhouse",
-    "seaweedfs", "sharedstorage", "objectstorage",
+    "seaweedfs", "sharedstorage", "objectstorage", "zbox",
 }
 unmapped = sorted(set(data) - KNOWN)
 if unmapped:

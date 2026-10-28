@@ -31,6 +31,7 @@ always match the documentation shipped beside them. If Bun is missing it says so
 | Anything else in the API | `zops api <operationId>` |
 | Connect to the private network | `zcli vpn up` — `zops` deliberately omits VPN |
 | Inside a running container | `zsc` |
+| Zerops Box sandboxes, bases, templates, workspace policy | `zbox` — the workspace API is not in the Zerops API; `zops` handles only the `zbox@1` service itself ([`zbox.md`](zbox.md)) |
 | Agent with MCP already wired up | `zcp` is fine for the operations it covers |
 
 ## Setup
