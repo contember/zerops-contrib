@@ -16,6 +16,11 @@ const OUT_SCHEMAS = join(ROOT, "src/generated/schemas.json");
 
 const HTTP_METHODS = ["get", "post", "put", "patch", "delete"] as const;
 
+// Upstream reuses an operationId for two endpoints; the later one would shadow the earlier in the index.
+const DUPLICATE_ID_RENAMES: Record<string, string> = {
+  "GET /api/rest/public/project/{id}/env": "GetProjectEnvList",
+};
+
 type Json = Record<string, any>;
 
 const spec: Json = Bun.YAML.parse(readFileSync(SPEC, "utf8")) as Json;
@@ -128,7 +133,7 @@ for (const [path, itemRaw] of Object.entries(spec.paths as Json)) {
     })();
 
     operations.push({
-      id: op.operationId,
+      id: DUPLICATE_ID_RENAMES[`${method.toUpperCase()} ${path}`] ?? op.operationId,
       method: method.toUpperCase(),
       path,
       tag: (op.tags?.[0] ?? "Other").replace(/^Public/, ""),
@@ -145,6 +150,14 @@ for (const [path, itemRaw] of Object.entries(spec.paths as Json)) {
 }
 
 operations.sort((a, b) => a.id.localeCompare(b.id));
+
+const seenIds = new Set<string>();
+for (const op of operations) {
+  if (seenIds.has(op.id)) {
+    throw new Error(`duplicate operationId ${op.id} (${op.method} ${op.path}); add it to DUPLICATE_ID_RENAMES`);
+  }
+  seenIds.add(op.id);
+}
 
 // Operation ids are inconsistently cased upstream (`GetProcessDetails` vs `createAppVersion`), so
 // lookups fall back to case-insensitive matching. `getUserInfo` and `GetUserInfo` are genuinely

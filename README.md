@@ -6,8 +6,8 @@ things that are useful together:
 - **the `zerops` skill** — how the platform actually behaves: `zerops.yaml` versus the import YAML,
   the service catalog and version strings, environment variables and cross-service references,
   networking, CDN and custom domains, the build/deploy lifecycle, autoscaling, backups.
-- **`zops`** — a CLI generated from the Zerops OpenAPI document. All **228 documented operations**
-  are reachable, plus 17 undocumented ones `zcli` uses internally; 123 have a curated command.
+- **`zops`** — a CLI generated from the Zerops OpenAPI document. All **247 documented operations**
+  are reachable, plus 17 undocumented ones `zcli` uses internally; 122 have a curated command.
   `--json` on everything, meaningful exit codes, no runtime dependencies.
 
 `zcli`, the official CLI, covers roughly a third of the API — restart, reload, autoscaling,
@@ -101,7 +101,7 @@ scripts/            sync-docs.sh — regenerate version tables from zeropsio/doc
 ```sh
 cd cli
 bun install
-bun test            # 54 tests
+bun test            # 63 tests
 bun run typecheck
 bun run generate    # rebuild the operation index after replacing openapi.yml
 ```

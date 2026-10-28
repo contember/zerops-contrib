@@ -244,47 +244,6 @@ environment variables — use \`zops service restart\` for that.`,
     },
   },
   {
-    path: ["service", "shared-storage", "connect"],
-    summary: "Mount a shared-storage service into a service.",
-    description: `Shared storage is a separate service type that several runtime services can mount at once,
-which is how you keep uploads off a container's ephemeral disk. The mount appears once the
-service restarts as part of this operation.`,
-    args: [
-      { name: "storage", description: "Shared-storage service hostname or id.", required: true },
-      { name: "service", description: "Service that should mount it. Defaults to --service." },
-    ],
-    examples: ["zops service shared-storage connect uploads api"],
-    operations: ["ConnectSharedStorage"],
-    async run(ctx, parsed) {
-      const storage = await ctx.service(parsed.args[0]!);
-      const service = await ctx.service(parsed.args[1]);
-      const body = { sharedStorageId: storage.id };
-      if (ctx.dryRun) return { dryRun: true, operation: "ConnectSharedStorage", service: service.name, body };
-      const res = await ctx.api.call("ConnectSharedStorage", { path: { id: service.id }, body });
-      ctx.out.data(await settleProcess(ctx, res, `mounting ${storage.name} into ${service.name}`));
-    },
-  },
-  {
-    path: ["service", "shared-storage", "disconnect"],
-    summary: "Unmount a shared-storage service from a service.",
-    description: "The storage service and its contents survive; only this service's mount goes away.",
-    destructive: true,
-    args: [
-      { name: "storage", description: "Shared-storage service hostname or id.", required: true },
-      { name: "service", description: "Service that currently mounts it. Defaults to --service." },
-    ],
-    operations: ["DisconnectSharedStorage"],
-    async run(ctx, parsed) {
-      const storage = await ctx.service(parsed.args[0]!);
-      const service = await ctx.service(parsed.args[1]);
-      await ctx.confirm(`unmount ${storage.name} from ${service.name}`);
-      const body = { sharedStorageId: storage.id };
-      if (ctx.dryRun) return { dryRun: true, operation: "DisconnectSharedStorage", service: service.name, body };
-      const res = await ctx.api.call("DisconnectSharedStorage", { path: { id: service.id }, body });
-      ctx.out.data(await settleProcess(ctx, res, `unmounting ${storage.name} from ${service.name}`));
-    },
-  },
-  {
     path: ["service", "debug"],
     summary: "Pause a build or runtime-prepare phase so the container can be inspected over SSH.",
     description: `Holds the pipeline at the chosen point and leaves the container alive, which is the only way

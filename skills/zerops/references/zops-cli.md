@@ -1,8 +1,8 @@
 # `zops` — complete, agent-first CLI
 
 `zops` ships with this plugin, in [`cli/`](../../../cli). It is generated from the Zerops OpenAPI
-document, so **all 228 public API operations are reachable** — including everything
-[`cli.md`](cli.md#what-zcli-cannot-do) lists as missing from `zcli`. 123 of them have a curated
+document, so **all 247 public API operations are reachable** — including everything
+[`cli.md`](cli.md#what-zcli-cannot-do) lists as missing from `zcli`. 122 of them have a curated
 command; the rest are one `zops api` call away.
 
 **`zops --help` and `zops commands --json` are the source of truth for syntax.** This page is the

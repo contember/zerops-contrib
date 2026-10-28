@@ -8,8 +8,8 @@ backups, environment writes, routing, rollback and deploy history have no comman
 you to the GUI. All of it is in the REST API, so all of it is here.
 
 ```
-228 documented operations + 17 undocumented · 100% reachable via `zops api`
-123 curated commands over the operations that deserve one · 0 runtime dependencies
+247 documented operations + 17 undocumented · 100% reachable via `zops api`
+122 curated commands over the operations that deserve one · 0 runtime dependencies
 ```
 
 ## Install

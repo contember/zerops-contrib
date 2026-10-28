@@ -272,6 +272,22 @@ address is not enough. \`zops project get\` reports the assigned address once it
     },
   },
   {
+    path: ["project", "ipv4", "release"],
+    summary: "Release the project's dedicated public IPv4 address.",
+    description: `The address is gone at once and routing that depends on it stops. The paid period is kept and
+reused by the next \`zops project ipv4 request\` until it ends.`,
+    destructive: true,
+    args: [{ name: "project", description: "Project name or id. Defaults to --project." }],
+    operations: ["ReleaseIpv4"],
+    async run(ctx, parsed) {
+      const project = parsed.args[0] ? await ctx.resolveProject(parsed.args[0]) : await ctx.project();
+      await ctx.confirm(`release the dedicated IPv4 address of ${project.name}`);
+      if (ctx.dryRun) return { dryRun: true, operation: "ReleaseIpv4", projectId: project.id };
+      const res = await ctx.api.call("ReleaseIpv4", { path: { id: project.id } });
+      ctx.out.data(await settleProcess(ctx, res, `releasing the IPv4 address of ${project.name}`));
+    },
+  },
+  {
     path: ["project", "ipv4", "shared"],
     summary: "Turn the shared public IPv4 address on or off.",
     description: "The shared address is free and carries HTTP traffic. Port routing on a shared address is limited to ports the platform assigns.",

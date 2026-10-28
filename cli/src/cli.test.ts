@@ -78,7 +78,7 @@ describe("command specs", () => {
 
 describe("generated operations", () => {
   test("covers the whole documented API surface", () => {
-    expect(OPERATIONS.length).toBe(228 + 17);
+    expect(OPERATIONS.length).toBe(247 + 17);
   });
 
   test("resolves ids case-insensitively but keeps genuinely distinct ids apart", () => {
@@ -177,7 +177,7 @@ describe("cli behaviour", () => {
   test("api --list covers every operation and -q prints bare ids", async () => {
     const { stdout, exitCode } = await runCli(["api", "--list", "-q"]);
     expect(exitCode).toBe(0);
-    expect(stdout.trim().split("\n")).toHaveLength(228 + 17);
+    expect(stdout.trim().split("\n")).toHaveLength(247 + 17);
   });
 
   test("api --describe prints an expanded schema without hitting the network", async () => {
@@ -195,7 +195,7 @@ describe("cli behaviour", () => {
     expect(parsed.tool).toBe("zops");
     expect(parsed.commands.length).toBe(COMMANDS.length);
     expect(parsed.exitCodes["8"]).toContain("remote operation");
-    expect(parsed.documentedOperationCount).toBe(228);
+    expect(parsed.documentedOperationCount).toBe(247);
     expect(parsed.undocumentedOperationCount).toBe(17);
   });
 
