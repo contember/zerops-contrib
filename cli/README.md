@@ -106,6 +106,8 @@ zops deploy api ./dist ./package.json         # ship prebuilt artifacts
 
 zops logs api --follow
 zops logs api --build                         # the log for the last build
+zops logs api --since 2d --until 1d --grep 'connection refused'
+zops logs api --since 1d --query '* | stats by (severity) count() lines'   # LogsQL
 zops logs api --json | jq -r 'select(.severity <= 3) | .message'
 
 zops version list api                         # deploy history
@@ -215,10 +217,15 @@ Everything named here is still reachable through `zops api` if you genuinely nee
 
 Discovered while building this; none of it is documented upstream:
 
-- **`limit` on the log endpoint is a scan window, not a result count.** The server filters within
-  the most recent N entries of the *project's combined* stream, so a narrow window over a busy
-  project returns nothing for a quiet service. `zops logs` therefore separates `--limit` (lines you
-  want) from `--scan` (how far back the server looks) and widens the scan automatically.
+- **Project logs are a VictoriaLogs instance with a LogsQL API.** `GetProjectLog` returns
+  `urlUi`, `https://<proxy>/logs-ui/<accessToken>/login`; the same prefix serves the read API
+  (`select/logsql/query`, `hits`, `stats_query`, `field_names`, `field_values`) with the token in
+  the path and no other auth. `extra_stream_filters` and `extra_filters` are honoured, which is how
+  `zops logs` scopes a free-form `--query` to one service. `select/logsql/tail` returns nothing
+  through the proxy, so `--follow` uses the older websocket instead.
+- **The older log stream replays the whole matching history on every connect.** It ignores `limit`
+  and `from`, and its entry ids are generated per request, so they cannot resume a stream.
+  `zops logs --follow` skips the replay by timestamp.
 - **Build logs are ordinary container logs** from a throwaway builder service, tagged
   `zbuilder@<appVersionId>`.
 - **Rollback is not its own endpoint** — it is `deployAppVersion` aimed at an archived version.

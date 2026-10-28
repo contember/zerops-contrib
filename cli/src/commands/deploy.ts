@@ -147,7 +147,7 @@ function attachPipelineLogs(ctx: Context, projectId: string, appVersionId: strin
     try {
       const logs = await LogClient.forProject(ctx, projectId);
       for await (const entry of logs.follow(
-        { serviceStackId, tags, limit: 100, facility: FACILITY.APPLICATION, minimumSeverity: SEVERITY.DEBUG },
+        { serviceStackId, tags, facility: FACILITY.APPLICATION, minimumSeverity: SEVERITY.DEBUG },
         abort.signal,
       )) {
         ctx.out.stderr(entry.message);

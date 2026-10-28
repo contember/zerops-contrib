@@ -133,7 +133,7 @@ Read only the file you need.
 | The `zcp` MCP server: tools, remote vs local setup, `ZCP_API_KEY`, generating a local `.env`, the production boundary — and the day-2 operations it covers that `zcli` has no command for | `references/zcp-mcp.md` |
 | `zops`, the complete agent-first CLI shipped with this plugin: how to invoke it, full API coverage, output contract and exit codes, waiting on async operations, `zops apply` for convergence, git-push builds, routing edits, CDN, access tokens, project and service configuration, the `zops api` passthrough, and the platform gotchas its help text cannot state | `references/zops-cli.md` |
 | Build phase, cache, runtime-prepare images, deploy strategy, readiness vs health checks, debug mode, CI/CD and repository integration, preview environments, diagnosing a failed build or deploy | `references/pipeline.md` |
-| Autoscaling and changing it on a live service, storage, backup and restore, HA migration, logging, observability, production checklist | `references/operations.md` |
+| Autoscaling and changing it on a live service, storage, backup and restore, HA migration, logging and querying logs with LogsQL, observability, production checklist | `references/operations.md` |
 
 Version tables in `references/service-catalog.md` are generated — refresh with the repository's
 `scripts/sync-docs.sh` (`--check` to inspect drift first).

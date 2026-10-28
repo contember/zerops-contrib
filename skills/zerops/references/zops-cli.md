@@ -74,6 +74,7 @@ zops status                                  # orient: project, services, health
 zops apply -f zerops-import.yaml --dry-run   # what would change; then drop --dry-run
 zops push api                                # streams build logs, exits 8 if the build fails
 zops logs api --build                        # why the last build failed
+zops logs api --since 1h --severity ERROR    # what went wrong recently
 zops version rollback api --yes              # undo the last deploy
 zops env set KEY value api --restart         # writes alone do NOT restart the service
 zops scale set api --min-containers 2 --max-containers 5
@@ -124,9 +125,10 @@ Deliberate limits, because the alternative is worse than drift:
   `zerops.yaml` builds, deploys and reports `ACTIVE` exactly like the right one; the only symptom is
   the app misbehaving. It now echoes the resolved `start` command for that reason — check it matches
   what you expect before believing a green deploy.
-- **Log `--limit` is not a scan depth.** The platform filters within a window over the project's
-  *combined* log stream, so `zops` separates `--limit` (lines you want) from `--scan` (how far back
-  the server looks). If a quiet service in a busy project returns nothing, raise `--scan`.
+- **`zops logs` filters on the server over the whole retained history.** `--since`, `--until`,
+  `--grep`, `--severity` and `--query '<LogsQL>'` all run in the project's VictoriaLogs; see
+  [`operations.md`](operations.md#logging) for the fields. `--follow` accepts only the service,
+  `--container`, `--type` and `--severity` filters, because the live stream supports no others.
 - **Build logs belong to a throwaway builder service**, tagged `zbuilder@<appVersionId>`.
   `zops logs <svc> --build` handles the lookup.
 - **Rollback is a redeploy of an archived version**, not a distinct endpoint. Nothing is rebuilt.

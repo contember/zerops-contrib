@@ -336,11 +336,37 @@ failure time and the logs.
 
 Three log types: **build**, **runtime prepare**, and **runtime/database** (stdout/stderr).
 
+Each project keeps its logs in its own **VictoriaLogs** instance (since May 2026; Vector ingests,
+syslog-ng forwards). The GUI's project log view embeds the VictoriaLogs UI, and the same instance
+answers **LogsQL** over HTTP. The reference docs mention neither; only the announcement does.
+
 ```sh
-zcli service log -S <service-id>
-zcli service log -S <service-id> --show-build-logs
+zops logs api --since 1h --severity ERROR
+zops logs api --since 2d --until 1d --grep 'connection refused'
+zops logs api --since 1d --query '* | stats by (appName) count() lines'
+zops logs api --build                       # the newest build's log
+zops logs api --follow
 zcli service log -S <service-id> --follow --format JSON
 ```
+
+**Raw LogsQL API.** `GET /project/{id}/log` (any project role, `READ_ONLY` included) returns
+`urlUi` = `https://<proxy>/logs-ui/<accessToken>/login`. Drop `login` and append
+`select/logsql/query`, `hits`, `stats_query`, `field_names` or `field_values` — the token in the
+path is the only auth, and it expires after about an hour. `extra_stream_filters={stackId="<id>"}`
+scopes a query to one service whatever the query text says. Ingest and admin paths are not
+exposed. **Verified live**, October 2026:
+
+| Field | Holds |
+|---|---|
+| `stackId` / `stackName` | Service id and hostname, as the API knows them. Build output sits under a temporary `build<host>v<n>` service |
+| `serviceId`, `serviceName` | An internal id and the container role (`runtime`, `db`) — **not** the service id |
+| `containerId`, `containerName`, `hostname` | The container |
+| `appName` | Syslog tag: `zerops@zerops` for the process's stdout, `zbuilder@<appVersionId>` for build output |
+| `facility`, `severity` | Numbers as strings: facility 16 = application, 17 = webserver access log, others are system daemons and cron |
+| `_msg` | The message; absent when empty |
+
+Stream fields are `stackId`, `serviceId`, `containerId` and `appName`. A whole-history `sort` can
+fail with *requires more than 46MB of memory* — bound the time range.
 
 Plain stdout/stderr is recorded at "info" level. **Emit syslog format if you need severity
 filtering.**
