@@ -41,7 +41,7 @@ jobs:
           # If an old CPU ever reports an illegal instruction, bun-linux-x64-baseline is the fix.
           for target in linux-x64 linux-arm64 darwin-x64 darwin-arm64; do
             echo "==> $target"
-            bun build --compile --minify --target="bun-$target" --outfile zops src/index.ts
+            bun build --compile --no-compile-autoload-dotenv --minify --target="bun-$target" --outfile zops src/index.ts
             tar -czf "../dist/zops-$target.tar.gz" zops
             rm zops
           done

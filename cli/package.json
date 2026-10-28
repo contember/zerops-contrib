@@ -9,7 +9,7 @@
   },
   "scripts": {
     "generate": "bun run scripts/generate.ts",
-    "build": "bun build --compile --minify --outfile dist/zops src/index.ts",
+    "build": "bun build --compile --no-compile-autoload-dotenv --minify --outfile dist/zops src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test"
   },

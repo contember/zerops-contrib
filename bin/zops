@@ -16,7 +16,9 @@ root=$(cd -- "$(dirname -- "$0")/.." && pwd)
 # PATH first, then the default install location — Bun is not on PATH in a non-login shell.
 for candidate in bun "${BUN_INSTALL:-$HOME/.bun}/bin/bun"; do
   if command -v "$candidate" >/dev/null 2>&1; then
-    exec "$candidate" "$root/cli/src/index.ts" "$@"
+    # --no-env-file: Bun would otherwise load .env from the caller's directory, and a stale
+    # ZEROPS_TOKEN there silently overrides the stored login.
+    exec "$candidate" --no-env-file "$root/cli/src/index.ts" "$@"
   fi
 done
 
