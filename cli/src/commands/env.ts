@@ -161,7 +161,7 @@ connection strings, credentials) merged with the ones you defined.`,
       const proc = existing
         ? await ctx.api.call<{ id: string }>("UpdateUserDataById", {
             path: { id: existing.id },
-            body: { content: value },
+            body: { key, content: value },
           })
         : await ctx.api.call<{ id: string }>("CreateUserData", {
             path: { id: service.id },
