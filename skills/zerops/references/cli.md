@@ -10,7 +10,7 @@ Three tools, three places:
   `zcli` cannot do (restart, scaling, env writes, events, verification). See
   [`zcp-mcp.md`](zcp-mcp.md).
 - **`zops`** — a from-scratch CLI **shipped with this plugin**, generated from the API's OpenAPI
-  document, so all 228 documented operations are reachable, plus the 17 undocumented `/search`
+  document, so all 247 documented operations are reachable, plus the 17 undocumented `/search`
   endpoints `zcli` uses internally. Designed for agents: `--json` everywhere, meaningful exit
   codes, name-based addressing, waits for async operations. Run it as
   `"$CLAUDE_PLUGIN_ROOT/bin/zops"`; nothing needs installing beyond Bun. See
@@ -218,7 +218,8 @@ A large part of day-2 management has no `zcli` command. Do not invent one — re
 | Object-storage CDN — enable, disable, purge | `zops cdn storage …` | GUI → the bucket's CDN panel |
 | Access tokens — create, rotate, revoke | `zops token …` | GUI → Settings → **Access Token Management** |
 | Upgrade the project core to HA | `zops project mode SERIOUS` | GUI → project settings. One-way |
-| Dedicated / shared public IPv4 | `zops project ipv4 …` | GUI → project settings |
+| Dedicated / shared public IPv4 | `zops project ipv4 request\|release\|shared` | GUI → project **Add-ons** |
+| Start a stopped project (e.g. after Zerops stopped it for lack of credit) | `zops project start` | GUI → **Start project**, or REST `PUT /project/{id}/start`. Does not bring the dedicated IPv4 back |
 | Remote log forwarding, Prometheus scrape targets | `zops project logging`, `zops project prometheus` | GUI → project settings |
 | Pause a build for inspection over SSH | `zops service debug` | GUI → *Pipelines & CI/CD settings* |
 | Platform notifications | `zops notification list` | GUI → the bell |
@@ -279,7 +280,10 @@ only* on a project through the GUI (the API can set `NO_ACCESS`).
 
 Project access is **Full access** or **Read only**. Read-only blocks more than writes: no SSH web
 terminal, no file browser, no backup or code download, no VPN key creation, and sensitive
-environment variables come back as `REDACTED`.
+environment variables come back as `REDACTED`. With full access, a personal access token still
+got plaintext from the env list endpoints (verified live, 2026-10). The API also has decrypted reads
+that require **sudo mode** — `GET /user-data/{id}/reveal` (service) and
+`GET /project-env/{id}/reveal` (project) — which a browser login enters through a consent page.
 
 ### Integration tokens
 
@@ -333,13 +337,14 @@ run:
     - zsc install python@3.11
 ```
 
-### `zsc execOnce <key> -- <command>`
+### `zsc exec-once <key> -- <command>`
 
 Runs a command exactly once across all containers of a service — the answer to "how do I run
-migrations without racing in HA".
+migrations without racing in HA". `execOnce` stays accepted as an alias; upstream now writes the
+kebab-case form, as it does for `env-replace`, `set-env` and `set-secret-env`.
 
 ```sh
-zsc execOnce ${ZEROPS_appVersionId} -- php /var/bin/console migrations:continue
+zsc exec-once ${ZEROPS_appVersionId} -- php /var/bin/console migrations:continue
 ```
 
 `-r/--retryUntilSuccessful` retries on a different container until it succeeds. On failure without
@@ -397,12 +402,52 @@ lacks capacity the container may migrate, which resets the duration.
 
 `zsc resources` prints the current allocation as JSON.
 
+### `zsc env-replace <source> <target>`
+
+Renders Go `text/template` files: `{{.VAR}}` becomes the value of env var `VAR`, the result goes to
+`<target>` and the source is never modified. A source directory is rendered recursively into the
+target directory. Guard optional variables with `{{if .VAR}}…{{end}}`; a file named
+`script.sh.0755` is written as `script.sh` with mode `0755`. The target must not be inside the
+source.
+
+```yaml
+run:
+  initCommands:
+    - zsc env-replace ./templates/app.conf /etc/app/app.conf
+```
+
+**Not the same as the `envReplace` key in `zerops.yaml`**, which rewrites `%%VAR%%` placeholders in
+deployed files in place. `zsc env-replace` runs per container start, so it sees the live runtime
+values.
+
+### `zsc shared-storage mount <name>` — SeaweedFS mount shortcut
+
+Shared storage is deprecated; the command keeps its name and now mounts a **SeaweedFS** service at
+`/mnt/<name>` with `weed mount` against `node-stable-1.db.<name>.zerops:8888`, with a RAM-lean tuning
+(~100–150 MB). **It needs `sudo`.**
+
+```yaml
+run:
+  startCommands:
+    - name: app
+      command: npm start
+    - name: storage
+      command: sudo zsc shared-storage mount storage            # foreground, restarted if it dies
+  # or, when initCommands need the files:
+  initCommands:
+    - sudo zsc shared-storage mount storage --background        # returns when ready, NOT restarted
+```
+
+`unmount` also removes the mount directory; `wait` blocks until the mount is ready. Migration from
+the managed mounts is in [`operations.md`](operations.md#seaweedfs-and-the-shared-storage-migration).
+
 ### `zsc object-storage`
 
 Backup and restore directories to an object-storage service. Requires `objectstorage_apiUrl`,
 `objectstorage_accessKeyId`, `objectstorage_secretAccessKey`, `objectstorage_bucketName` in the
-environment (present automatically only with `envIsolation: none`; otherwise reference them
-explicitly).
+environment — present automatically only when the storage shares its variables with your service
+(`envIsolation: none`, or `envIsolation: service@<your-hostname>` on the storage or the project);
+otherwise reference them explicitly.
 
 ```sh
 zsc object-storage list    --storage <svc> --name <backup>
@@ -432,8 +477,7 @@ run:
 | `zsc backup-create <stackName>` | Trigger a backup of a service |
 | `zsc cdn purge <domain> [pattern]` | Invalidate CDN cache. Static-mode CDN only; run from any container in the project. Patterns: `"/*"`, `"/images/"`, `"/path/file$"` |
 | `zsc crontab list \| run` | Inspect or trigger cron entries from `zerops.yaml` |
-| `zsc setSecretEnv <key> <value>` | Update a secret variable; `-` reads stdin |
-| `zsc shared-storage mount\|unmount\|wait <name>` | Manage `/mnt/<name>` mounts |
+| `zsc set-env <key> <value> [--sensitive]` | Set or update a variable of the current service; `-` reads stdin. Without `--sensitive` an existing variable keeps its secret flag and a new one is plain. `setSecretEnv` / `set-secret-env` is the deprecated always-sensitive form |
 | `zsc test tcp <host>:<port>` | Connectivity probe. `--timeout` (30s), `--dialTimeout` (2s), `-4`, `-6` |
 | `zsc fail-me` | Deliberately fail the container (testing) |
 | `zsc resources` | Current CPU/RAM/disk allocation |

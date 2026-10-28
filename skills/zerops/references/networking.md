@@ -178,7 +178,15 @@ re-check instead of waiting for the platform's own schedule.
 |---|---|---|
 | IPv6 | free | One per project, auto-activated with the first domain. Recommended alongside IPv4. |
 | Shared IPv4 | free | **HTTP/HTTPS only**, limited connections, shorter timeouts, blacklist risk. Requires **both A and AAAA** records — Zerops reverse-looks-up the AAAA record for SNI ownership verification; without it routing fails silently. Not for production. |
-| Dedicated IPv4 | $3 / 30 days | All protocols, one per project, shared by all its services. Auto-renews, non-refundable, reusable in another project until the subscription ends. **Recommended for production.** |
+| Dedicated IPv4 | $3 per month | All protocols, one per project, shared by all its services. Called **unique IPv4 address** in the GUI. **Recommended for production.** |
+
+**Dedicated IPv4 lifecycle.** Activation needs an active project, at least one past top-up in the
+organization, and a balance covering the first month. Monthly subscription from the activation
+moment, charged in advance, never refunded. **Releasing** it (GUI *Add-ons*, `PUT
+/project/{id}/release-ipv4`) drops the project to the shared IPv4 at once; the paid period stays
+with the organization and is reused free by the next activation on any of its projects. **The next
+activation may get a different address — recheck DNS A records.** Zerops also releases it when it
+stops a project for lack of credit, and starting the project again does not bring it back.
 
 ## Direct port access
 

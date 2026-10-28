@@ -64,23 +64,39 @@ The left-hand key is what your app reads; `${hostname_varname}` is the source.
 
 ## Isolation modes
 
-| Mode | Behavior |
-|---|---|
-| `service` (default) | Siblings isolated. Explicit `${hostname_varname}` references required. |
-| `none` (legacy) | Every service's variables auto-injected into every container as bare `<host>_KEY`. Broad and ambiguous — avoid. |
+`envIsolation` is a space-separated list of rules. **It is owner-side**: a service's own rules
+decide who sees *its* variables. The reader's rules are never consulted, so a service cannot grant
+itself access to a sibling's secrets.
 
-Set at project level, overridable per service:
+| Rule | Behavior |
+|---|---|
+| `service` (default) | Nobody else sees this service's variables. Explicit `${hostname_varname}` references required. |
+| `none` | Every service sees them as bare `<host>_KEY`. Broad — prefer a grant. |
+| `service@name` | Service `name` additionally sees them as bare `<host>_KEY`. |
+| `-service@name` | Service `name` never sees them, even with `none`. |
+
+For reader R against owner O: `-service@R` → hidden, else `service@R` → visible, else `none` →
+visible, else hidden. A service always sees its own variables.
+
+Set at project level; a service-level value **replaces** the project value (no merge):
 
 ```yaml
 project:
-  envIsolation: none        # legacy — avoid
+  envIsolation: service@zcp          # the zcp service sees every service inheriting this
 services:
   - hostname: db
-    envIsolation: none      # expose only THIS service's vars to siblings
+    envIsolation: none               # everyone sees db's variables
+  - hostname: api
+    envIsolation: service            # opts out of the project grant — not even zcp sees api
+  - hostname: cache
+    envIsolation: none -service@api  # everyone except api
 ```
 
-Explicit references work in **both** modes, so code stays correct if isolation ever changes.
-Keep the default.
+In import YAML it may also be nested under `envVariables` / `envSecrets` (the nested one wins).
+
+Explicit references work in **every** mode, so code stays correct if isolation ever changes.
+Keep the default; when one tooling or admin service needs broad read access, grant it with
+`service@<hostname>` at project level rather than switching to `none`.
 
 ## Project variables are inherited
 
@@ -160,8 +176,13 @@ context. It is never used for project variables.
 
 - Defined via import YAML `envSecrets` / `dotEnvSecrets`, or the GUI (individually or with the bulk
   `.env`-format editor).
-- Masked in the GUI. Via the API an admin/write token returns the value; a read-only token gets
-  `REDACTED`. Inside the container the value is plaintext — the app needs it.
+- Masked in the GUI. Through the API a read-only token gets `REDACTED`; verified live (2026-10),
+  a full-access personal token still gets plaintext from the service env list endpoints
+  (`zops env list` / `env show`). The API also has dedicated decrypted reads that require
+  **sudo mode** (`GET /user-data/{id}/reveal`, `/project-env/{id}/reveal`,
+  `GET /project/{id}/project-env/env-file`), and Zerops' own `zbox` CLI enters sudo before reading
+  a sensitive value — so if a list read starts returning `REDACTED`, this is the way back.
+  Inside the container the value is plaintext — the app needs it.
 - Editable without a redeploy; the service must be **restarted** to pick up the new value.
 - Generate them at import time with the [YAML preprocessor](import-yaml.md#yaml-preprocessor)
   rather than committing them.

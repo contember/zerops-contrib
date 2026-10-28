@@ -1,6 +1,6 @@
 ---
 name: zerops
-description: Build, configure, deploy and operate applications on Zerops (zerops.io) — a bare-metal PaaS. Covers `zerops.yaml` (build/run pipeline, in the repo) and the project/service import YAML, the service catalog and version strings, environment variables and cross-service references, networking and CDN, `zcli`/`zsc`/`zcp`/`zops`, roles and access tokens, autoscaling, storage, backups and the deploy lifecycle. Use whenever the user mentions Zerops, zerops.yaml / zerops.yml, zerops-import.yaml, zcli, zsc, zcp, zops, ZCP_API_KEY, `.zerops.app` subdomains, `buildFromGit`, `deployFiles`, `envSecrets`, `yamlPreprocessor`, `zeropsSubdomainHost`, service types like `postgresql:ha@18` / `php-nginx@8.4` / `object-storage`; Zerops Box, `zbox`, `zbox@1`, Box Workspace or agent sandboxes on Zerops; whenever the working repository contains a `zerops.yaml`, `zerops.yml`, `zerops-import.yaml` or a `.mcp.json` with a Zerops MCP server; or when asked to deploy, provision, scale, roll back, or debug an app on Zerops.
+description: Build, configure, deploy and operate applications on Zerops (zerops.io) — a bare-metal PaaS. Covers `zerops.yaml` (build/run pipeline, in the repo) and the project/service import YAML, the service catalog and version strings, environment variables and cross-service references, networking and CDN, `zcli`/`zsc`/`zcp`/`zops`, roles and access tokens, autoscaling, storage, backups and the deploy lifecycle. Use whenever the user mentions Zerops, zerops.yaml / zerops.yml, zerops-import.yaml, zcli, zsc, zcp, zops, ZCP_API_KEY, `.zerops.app` subdomains, `buildFromGit`, `deployFiles`, `envSecrets`, `vault`, `yamlPreprocessor`, `zeropsSubdomainHost`, `run.volume`, service types like `postgresql:ha@18` / `php-nginx@8.4` / `object-storage` / `local-storage` / `seaweedfs` / `swarm@1`; Zerops Box, `zbox`, `zbox@1`, Box Workspace or agent sandboxes on Zerops; whenever the working repository contains a `zerops.yaml`, `zerops.yml`, `zerops-import.yaml` or a `.mcp.json` with a Zerops MCP server; or when asked to deploy, provision, scale, roll back, or debug an app on Zerops.
 ---
 
 # Zerops
@@ -54,7 +54,7 @@ project:
   corePackage: LIGHT
 services:
   - hostname: app
-    type: nodejs@22
+    type: alpine/nodejs@22
     enableSubdomainAccess: true   # .zerops.app subdomain — dev/testing only
     minContainers: 1
     maxContainers: 2
@@ -69,7 +69,7 @@ services:
 zerops:
   - setup: app
     build:
-      base: nodejs@22
+      base: alpine/nodejs@22
       buildCommands:
         - npm ci
         - npm run build
@@ -79,7 +79,7 @@ zerops:
         - ./node_modules      # omit only if the build bundles dependencies
       cache: node_modules
     run:
-      base: nodejs@22
+      base: alpine/nodejs@22
       ports:
         - port: 3000
           httpSupport: true
@@ -106,7 +106,9 @@ Webserver runtimes (`php-apache`, `php-nginx`, `nginx`, `static`) are shaped dif
 4. **Never write `FOO: ${FOO}`** (same name both sides) — it self-shadows and resolves to the literal
    `${FOO}`. Project variables are already inherited; just read them.
 5. **The container filesystem is replaced on every deploy.** Restarts keep it; deploys and scale-ups
-   do not. Uploads → object storage, sessions → Valkey.
+   do not. Uploads → object storage, sessions → Valkey, SQLite or a single-node stateful app → Local
+   storage (`run.volume`). Shared storage is deprecated: converted services are SeaweedFS and the
+   runtime mounts them itself.
 6. **`build.deployFiles` is the entire runtime filesystem**, not a list of build outputs. Nothing
    reinstalls dependencies at runtime — an unbundled app must ship `node_modules` / `vendor` and its
    manifest too.
@@ -114,8 +116,11 @@ Webserver runtimes (`php-apache`, `php-nginx`, `nginx`, `static`) are shaped dif
    use a `|` block scalar when they must.
 8. **`run.initCommands` run on every container start, in parallel across containers**, and a
    non-zero exit aborts the deploy. Gate once-per-version work with
-   `zsc execOnce ${ZEROPS_appVersionId} -- <cmd>`.
-9. **HA is immutable.** `postgresql:single@18` → `postgresql:ha@18` is a new service, not an edit —
+   `zsc exec-once ${ZEROPS_appVersionId} -- <cmd>` (`execOnce` still works).
+9. **Write the OS in every type and base** (`alpine/nodejs@22`, `ubuntu/nodejs@22`). A bare
+   version resolves to Ubuntu in import but Alpine in `zerops.yaml`, and every deploy rewrites the
+   service's OS to match `run.base`. The `os:` key is deprecated.
+10. **HA is immutable.** `postgresql:single@18` → `postgresql:ha@18` is a new service, not an edit —
    back up and migrate the data first (`references/operations.md`).
 
 ## Where to look
@@ -125,16 +130,16 @@ Read only the file you need.
 | Task | File |
 |---|---|
 | Write or fix `zerops.yaml`; build/run/deploy keys, webserver vs process runtimes, cron, health checks, `extends`, `envReplace`, static routing, PHP/FPM tuning | `references/zerops-yaml.md` |
-| Provision or export projects/services; autoscaling fields, `envSecrets`, `buildFromGit`, `yamlPreprocessor` functions | `references/import-yaml.md` |
-| Pick a service type or version string; per-service generated env vars, ports, connection strings, DB admin access | `references/service-catalog.md` |
+| Provision or export projects/services; autoscaling fields, `vault` / `envSecrets`, `buildFromGit`, `yamlPreprocessor` functions | `references/import-yaml.md` |
+| Pick a service type or version string, and the OS prefix; per-service generated env vars, ports, connection strings, DB admin access; storage choice (object / Local storage / SeaweedFS); Swarm container pools | `references/service-catalog.md` |
 | Env var scopes, isolation, precedence, build/runtime bridging, secrets, rotating a credential | `references/env-variables.md` |
 | Hostnames, ports, subdomains, custom domains, L7 balancer, CDN, firewall and outbound ports, VPN, SSH and the web terminal, local development, 502 debugging | `references/networking.md` |
-| `zcli` commands and config; what `zcli` cannot do and the REST API; roles, project access and integration tokens; `zsc` in-container commands — run once across HA (`execOnce`), keep a container alive (`noop`), debug-mode control, temporary scaling, backups | `references/cli.md` |
+| `zcli` commands and config; what `zcli` cannot do and the REST API; roles, project access and integration tokens; `zsc` in-container commands — run once across HA (`exec-once`), set env from a container (`set-env`), render templates (`env-replace`), keep a container alive (`noop`), debug-mode control, temporary scaling, backups | `references/cli.md` |
 | The `zcp` MCP server: tools, remote vs local setup, `ZCP_API_KEY`, generating a local `.env`, the production boundary — and the day-2 operations it covers that `zcli` has no command for | `references/zcp-mcp.md` |
 | `zops`, the complete agent-first CLI shipped with this plugin: how to invoke it, full API coverage, output contract and exit codes, waiting on async operations, `zops apply` for convergence, git-push builds, routing edits, CDN, access tokens, project and service configuration, the `zops api` passthrough, and the platform gotchas its help text cannot state | `references/zops-cli.md` |
 | Build phase, cache, runtime-prepare images, deploy strategy, readiness vs health checks, debug mode, CI/CD and repository integration, preview environments, diagnosing a failed build or deploy | `references/pipeline.md` |
 | Zerops Box (`zbox@1`): sandboxes for AI agents — the workspace service and what restart/resize does to sandboxes, the `zbox` CLI and its API, park/fork/snapshot, exec and sessions, ports and egress, secrets, integrations and connectors, bases and warm templates, capacity | `references/zbox.md` |
-| Autoscaling and changing it on a live service, storage, backup and restore, HA migration, logging and querying logs with LogsQL, observability, production checklist | `references/operations.md` |
+| Autoscaling and changing it on a live service, Local storage and SeaweedFS (incl. migrating off the deprecated shared storage), backup and restore, billing and restarting a stopped project, HA migration, logging and querying logs with LogsQL, observability, production checklist | `references/operations.md` |
 
 Version tables in `references/service-catalog.md` are generated — refresh with the repository's
 `scripts/sync-docs.sh` (`--check` to inspect drift first).

@@ -67,6 +67,8 @@ subdomain access on, default base pulled, 8081 subdomain added as a domain. Size
 
 Created via import YAML or GUI, the workspace starts **without a base and without a domain**:
 
+The docs write `zbox@1`; the live import schema lists it as `ubuntu/zbox@1`.
+
 ```yaml
 services:
   - hostname: box

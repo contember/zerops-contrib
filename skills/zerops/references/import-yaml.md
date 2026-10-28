@@ -13,7 +13,7 @@ Schema: `https://api.app-prg1.zerops.io/api/rest/public/settings/import-project-
 - [`services`](#services)
 - [Vertical autoscaling](#vertical-autoscaling)
 - [Horizontal scaling](#horizontal-scaling)
-- [Shared storage mounts](#shared-storage-mounts)
+- [Storage: no mounts in import](#storage-no-mounts-in-import)
 - [Object storage](#object-storage)
 - [Embedding `zerops.yaml`](#embedding-zeropsyaml)
 - [Export](#export)
@@ -54,7 +54,10 @@ project:
 | `description` | string | |
 | `corePackage` | enum | `LIGHT` (single-container core) or `SERIOUS` (HA multi-container core). **Upgradeable but not downgradeable**; the upgrade is partially destructive — logs and statistics are lost, ~35 s network outage, $10 fee. |
 | `tags` | list of strings | Filtering only. |
-| `envVariables` | map | Project-scope variables, automatically available in every service. Do not reference them with `${...}` from a service — just read them. |
+| `envVariables` | map | Project-scope variables, automatically available in every service. Do not reference them with `${...}` from a service — just read them. Marked deprecated in the live schema in favour of `vault`. |
+| `envSecrets` | map | Sensitive project variables. Deprecated in favour of `vault`. |
+| `vault` | map | The live schema's replacement for both maps above: `KEY: value`, or `KEY: {value: …, sensitive: true}`. Not yet in the upstream reference — `envVariables`/`envSecrets` still work. |
+| `sharedIpv4` | bool | Whether the project domain gets an A record to the shared IPv4 (AAAA always). Ignored once the project has a dedicated IPv4. |
 | `envIsolation` | enum | `service` (default, siblings isolated) or `none` (legacy, all vars auto-injected). |
 
 `zeropsSubdomainHost` is a platform-generated project variable available from project creation —
@@ -82,28 +85,33 @@ services:
 | Field | Type | Notes |
 |---|---|---|
 | `hostname` | string, required | Max **25 chars, lowercase `[a-z0-9]` only** — dashes, underscores and uppercase are rejected (`serviceStackNameInvalid`). Unique within the project. |
-| `type` | enum, required | Service type + version. See `service-catalog.md`. |
+| `type` | enum, required | Service type + version. See `service-catalog.md`. **Write the OS for runtimes**: `alpine/nodejs@22`, `ubuntu/python@3.12`. The live schema enum lists runtimes *only* in that form; a bare `nodejs@22` is legacy, still accepted, and resolves to **Ubuntu** in import (Alpine as a `zerops.yaml` `base:`). Box Workspace appears as `ubuntu/zbox@1`. |
 | `profile` | string | Scaling/tuning preset — PostgreSQL and Valkey only. See `service-catalog.md`. |
 | `profileOverrides` | map | Individual engine params. PostgreSQL requires `profile: custom` for these; Valkey accepts them alongside any profile. |
-| `mode` | enum | `NON_HA` / `HA`. **Deprecated only where a `:single`/`:ha` type variant exists** (PostgreSQL, MariaDB, ClickHouse, Valkey, shared storage, SeaweedFS) — there, write the variant. For Elasticsearch, Typesense, Kafka and other services with no variant, `mode: HA` is still the documented and only way to get HA. |
-| `envSecrets` | map | Secret variables — masked in the GUI, editable later, no redeploy needed (restart required). **The only way to set service variables from the import YAML**; there is no `services[].envVariables`. Non-secret runtime variables go in `zerops.yaml` `run.envVariables`. |
+| `mode` | enum | `NON_HA` / `HA`. **Deprecated only where a `:single`/`:ha` type variant exists** (PostgreSQL, MariaDB, ClickHouse, Valkey, SeaweedFS) — there, write the variant. For Elasticsearch, Typesense, Kafka and other services with no variant, `mode: HA` is still the documented and only way to get HA. |
+| `envSecrets` | map | Secret variables — masked in the GUI, editable later, no redeploy needed (restart required). Non-secret runtime variables belong in `zerops.yaml` `run.envVariables`. The live schema marks it deprecated in favour of `vault`; it still works. |
 | `dotEnvSecrets` | string (multiline) | Same, in `.env` format. |
+| `envVariables` / `dotEnvVariables` | map / string | Non-sensitive service variables, editable in the GUI. In the live schema (`envVariables` already marked deprecated for `vault`); not in the upstream reference. |
+| `vault` | map | Live-schema replacement for the above: `KEY: value` or `KEY: {value: …, sensitive: true}`. Not yet in the upstream reference. |
 | `sshIsolation` | string | SSH access rules, default `vpn`. See [`networking.md`](networking.md#sshisolation). |
 | `envIsolation` | enum | Per-service override of the project setting. May also be nested under `envVariables`/`envSecrets`, in which case the nested value wins. |
 | `buildFromGit` | URL | One-time build from a **public** GitHub/GitLab repo. A private repo fails at clone with no build log. **No trailing `.git`** — that fails the same way. |
-| `startWithoutCode` | bool | Default `false`. `true` starts runtime containers before any deploy — useful for a container to SSH into. Version working setup steps into `run.prepareCommands` afterwards. |
+| `startWithoutCode` | bool | Default `false`. `true` starts runtime containers before any deploy — useful for a container to SSH into. Version working setup steps into `run.prepareCommands` afterwards. On Swarm it makes the pool usable before a first deploy. |
 | `enableSubdomainAccess` | bool | Default `false`. Enables the `.zerops.app` subdomain. Dev/testing only. |
 | `priority` | integer | Higher = created sooner. Use it to bring databases up before the app. |
 | `override` | bool | Default `false`. **Runtime services only.** `true` replaces an existing service of the same hostname and triggers a redeploy. |
 | `objectStorageSize` | integer | Whole number 1–100 (GB), object-storage only. Changeable in the GUI afterwards. |
 | `objectStoragePolicy` | enum | `private` / `public-read` / `public-objects-read` / `public-write` / `public-read-write` / `custom`. |
 | `objectStorageRawPolicy` | JSON | Custom S3 policy; `{{ .BucketName }}` placeholder available. |
-| `mount` | list of strings | Shared-storage hostnames to mount. Requires `buildFromGit`. |
-| `nginxConfig` | string (multiline) | Full nginx config for webserver services. |
+| `enableCdn` | bool | Object storage only: put the bucket behind the CDN. |
 | `zeropsSetup` | string | Which `setup:` from `zerops.yaml` to use. Defaults to the hostname. |
 | `zeropsYaml` | object | Inline `zerops.yaml`; used instead of the repo's file. |
-| `minContainers` / `maxContainers` | integer | 1–10. Runtimes and Linux containers only. |
+| `minContainers` / `maxContainers` | integer | 1–10. Runtimes and Linux containers only. On Swarm they are pool limits for API calls (min may be `0`), not autoscaling bounds — see `service-catalog.md`. |
 | `verticalAutoscaling` | object | See below. |
+| `os` | string | Deprecated — put the OS in `type`. |
+
+**Removed:** `mount` (shared-storage mounts) fails the import with `yamlMountDeprecated`, and
+`nginxConfig` is gone from both the schema and the upstream reference. Neither is accepted any more.
 
 ## Vertical autoscaling
 
@@ -130,23 +138,24 @@ Set min = max on any resource to pin it. See `operations.md` for thresholds, def
 `minContainers` / `maxContainers`, range 1–10. Runtimes and Linux containers only — managed
 services have a fixed container count baked into the `:single` / `:ha` type variant.
 
-## Shared storage mounts
+## Storage: no mounts in import
+
+The import only **creates** storage services; mounting happens in the runtime's `zerops.yaml`:
 
 ```yaml
 services:
-  - hostname: app
-    type: nodejs@22
-    buildFromGit: https://github.com/myorg/myapp
-    mount:
-      - filestorage
-  - hostname: filestorage
-    type: shared-storage:ha
+  - hostname: vol
+    type: local-storage:single@1   # mounted via run.volume
+  - hostname: files
+    type: seaweedfs:ha@3.85        # mounted via a weed mount start command
 ```
 
-Mounted at `/mnt/<storage-hostname>` in runtime containers only (not build, not runtime-prepare).
-`buildFromGit` is required because an import without it creates an empty shell with nothing to
-mount into; otherwise deploy first and connect the storage in the GUI or with
-`zsc shared-storage mount`.
+- Local storage → `run.volume: {hostname: vol}` in `zerops.yaml`.
+- SeaweedFS → a `run.startCommands` entry running `weed mount`, or `zsc shared-storage mount`.
+- `shared-storage:single` / `:ha` still import, but create SeaweedFS. The old `mount:` field fails
+  with `yamlMountDeprecated`.
+
+Details and trade-offs in [`service-catalog.md`](service-catalog.md#local-storage).
 
 ## Object storage
 

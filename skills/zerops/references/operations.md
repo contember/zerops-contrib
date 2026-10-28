@@ -10,7 +10,8 @@
   - [Moving a managed database to HA](#moving-a-managed-database-to-ha)
 - [Persistence](#persistence)
 - [Object storage](#object-storage)
-- [Shared storage](#shared-storage)
+- [Local storage](#local-storage)
+- [SeaweedFS and the shared-storage migration](#seaweedfs-and-the-shared-storage-migration)
 - [Backups](#backups)
   - [Coverage](#coverage)
   - [Schedule, tags, retention](#schedule-tags-retention)
@@ -18,6 +19,7 @@
 - [Logging](#logging)
 - [Metrics and observability](#metrics-and-observability)
 - [Production checklist](#production-checklist)
+- [Billing and stopped projects](#billing-and-stopped-projects)
 
 ## Project core
 
@@ -37,8 +39,9 @@ firewall.
 
 The upgrade LIGHT → SERIOUS is **one-way and partially destructive**: all project logs and
 statistics are lost (forwarded ones are not), services are network-unavailable for ~35 s on
-average, a $10 core fee is charged, and free resource allowances reset to the Serious limits. IP
-addresses are unchanged. Choose deliberately at creation time.
+average, the unused rest of the Lightweight period is refunded as promo credit and the first month of
+Serious ($10) is charged, and free resource allowances reset to the Serious limits. IP addresses are
+unchanged. Choose deliberately at creation time.
 
 ## Autoscaling
 
@@ -48,7 +51,8 @@ addresses are unchanged. Choose deliberately at creation time.
 | Linux containers (Alpine, Ubuntu) | yes | yes, 1–10 containers |
 | Managed DB (PostgreSQL, MariaDB, ClickHouse) | yes | no — fixed by `:single` (1) / `:ha` (3) |
 | Managed cache (Valkey, KeyDB) | yes | no — fixed by the variant |
-| Shared storage | yes | no — fixed by the variant |
+| SeaweedFS | yes | no — `:single` (1) / `:ha` (**2**) |
+| Local storage | yes | no — single container only, no HA variant |
 | Object storage | no | no — fixed quota, changeable in the GUI |
 | Docker | no (manual, restarts the VM) | manual only, restarts the VM |
 
@@ -206,7 +210,8 @@ stop/start; they are lost on deploy and on container replacement (scale-up/down,
 | Database dumps | Object storage |
 | Temporary files | Container disk is fine |
 | Build artifacts | `deployFiles`, not storage |
-| Shared POSIX files across containers | Shared storage |
+| SQLite, Prometheus, Gitea — anything needing locking, mmap, a real FS | Local storage (`run.volume`) |
+| Files shared between containers and services over the network | SeaweedFS |
 
 ## Object storage
 
@@ -221,37 +226,73 @@ variables in [`service-catalog.md`](service-catalog.md#object-storage). Key poin
   internet.
 - **Not covered by Zerops backups.**
 
-## Shared storage
+## Local storage
 
-```yaml
-services:
-  - hostname: files
-    type: shared-storage:ha
-```
+`local-storage:single@1` — a persistent volume on one physical machine, mounted with `run.volume`
+in `zerops.yaml` (catalog entry in [`service-catalog.md`](service-catalog.md)). Operational facts:
 
-- Mounted at `/mnt/<storage-hostname>` in **runtime containers only** — not build, not
-  runtime-prepare.
-- Content is shared across all containers of every connected service.
-- Multiple storages can mount into one service.
-- The mount point is owned by the `zerops` user — no sudo needed.
-- Mounting **removes existing content** of the mount directory.
-- Connecting registers the link immediately, but **the FUSE mount only materialises on the next
-  fresh deploy** (new container creation) — a plain restart does not bring it up. Redeploy after
-  connecting.
-- A runtime that was not yet deployed at import time does not pick up the import `mount:`; connect
-  it explicitly once it is active.
-- HA storage replicates 1:1 with automatic failover; the mount is briefly unavailable (~30 s)
-  during a master failover.
-- A shared-storage service holds at most **60 GB of data** regardless of disk scaling. For user
-  uploads and high-write churn prefer object storage — shared storage is POSIX/NFS-style and not
-  built for throughput.
-- Mount output is logged as `zerops-mount-<hostname>`; individual file operations are not.
-- `df` reports misleading numbers for these mounts — trust the GUI.
-- Disconnect from all services before stopping or deleting the storage service.
+- **Not HA, and it pins its users.** Every container of every service that mounts the volume is
+  placed on the volume's machine. A hardware failure or maintenance move stops all of them together;
+  recovery of the data is not guaranteed. Horizontal scaling is capped by that one machine.
+- One volume per runtime service; several services can mount the same volume. Runtime containers
+  only — not build, not prepare.
+- The service's own maintenance container has the volume at `/data`, with web terminal, file
+  browser and SSH like a runtime.
+- **Backups are a `.tar.gz` of the live volume**, so a database file can be captured mid-write and
+  not restore. For SQLite and other embedded databases, write a consistent copy onto the volume on a
+  cron and let the backup pick it up:
 
-Connect in the GUI (*Shared storage connections*), via `mount:` in the import YAML (requires
-`buildFromGit`), with `zsc shared-storage mount|unmount|wait <name>` from inside a container, or
-from outside with `zops service shared-storage connect <storage> <service>` (and `disconnect`).
+  ```yaml
+  run:
+    crontab:
+      - command: sqlite3 /mnt/vol/app.db ".backup /mnt/vol/backup/app.sqlite"
+        timing: "30 * * * *"
+        allContainers: false
+  ```
+
+  `sqlite3` is not in the base images — install it in `run.prepareCommands`.
+
+## SeaweedFS and the shared-storage migration
+
+**Shared storage is deprecated.** Every existing shared-storage service was converted in place to a
+SeaweedFS service — same hostname, containers and data. `shared-storage:ha|single` still imports
+and creates SeaweedFS; prefer `seaweedfs:ha@3.85` / `seaweedfs:single@3.85`. The import `mount:`
+field is **rejected** (`yamlMountDeprecated`), the GUI connections page is gone, and the API
+dropped the connect/disconnect endpoints.
+
+Zerops no longer mounts SeaweedFS for you; the runtime mounts it itself (see
+[`cli.md`](cli.md#zsc-shared-storage-mount-name--seaweedfs-mount-shortcut)). Old connections live on
+as the runtime's `zeropsSharedStorageMounts` env var (`|`-separated hostnames, mounted at
+`/mnt/<hostname>` on container start) — **best-effort, logs a deprecation warning, and will be
+removed.** Migration, per runtime service:
+
+1. Back up the storage.
+2. Add a mount to `zerops.yaml` at the **same path**: a `startCommands` entry
+   `sudo zsc shared-storage mount <storage>`, or `--background` in `initCommands` when init commands
+   need the files.
+3. Delete `zeropsSharedStorageMounts` (or drop the hostname from its list). **Applied live** — the
+   managed mount disappears from running containers immediately, so do 3 and 4 back to back.
+4. Deploy. Delete the variable **before** the deploy, otherwise both mounts target one directory.
+5. Replace `mount:` in import files with the `startCommands` entry.
+
+Rollback: put the hostname back in `zeropsSharedStorageMounts`, drop the start command, deploy.
+
+To leave SeaweedFS for Local storage instead: stop all writers, import the `local-storage` service
+plus a throwaway `ubuntu` service (`startWithoutCode: true`) that mounts both, `cp -a` / `rsync -aH`
+across, remove the old mounts, set `run.volume` with `mountPath: /mnt/<old-hostname>` so the app is
+unchanged, deploy, verify, then delete the migrator and the stopped SeaweedFS. A service that
+mounted several storages must merge them into subdirectories of one volume.
+
+SeaweedFS facts that bite:
+
+- **Not for databases** — locks are per mount only and the store is append-only. SQLite, TSDBs →
+  Local storage.
+- **60 GB data cap** regardless of disk scaling. HA master failover makes it unavailable ~30 s.
+- The filer at `http://<storage>.zerops:8888` is **unauthenticated**, project network and VPN only.
+  HTTP uploads cap at 64 MB per file; mounted writes are chunked and unlimited.
+- A mount started from `initCommands` (`--background`, or raw `weed fuse`) is **not restarted** if
+  it dies; the `startCommands` form is.
+- `df` inside the mount is misleading — use the GUI.
 
 ## Backups
 
@@ -262,7 +303,7 @@ to switch on. Manage them at GUI → service → **Backups List & Configuration*
 
 | Covered | Not covered |
 |---|---|
-| PostgreSQL, MariaDB, Qdrant, Elasticsearch, NATS, Meilisearch, **Shared Storage** | Runtimes, **Object Storage**, **Valkey / KeyDB** (in-memory) |
+| PostgreSQL, MariaDB, Qdrant, NATS, Meilisearch, **Local Storage**, **SeaweedFS** | Runtimes, **Object Storage**, **Valkey / KeyDB** (in-memory), **Elasticsearch** (dropped from the list upstream) |
 
 **ClickHouse** is not on the automatic path — use the native `BACKUP ALL …` SQL command as
 superuser, which produces a `.tar.gz`.
@@ -288,6 +329,10 @@ Retention defaults: at least 7 daily + 4 weekly + 3 monthly, max 50 backups per 
 5 GB included on Lightweight, 25 GB on Serious, 1 TiB technical maximum per project; beyond the
 included tier it is billed. A backup that would exceed the storage limit is simply not stored.
 
+Backups of a **deleted** service are still reachable at project level during the grace period:
+`GET /project/{id}/backup` lists them, `POST /project/{id}/backup/download-url/{serviceStackId}/{date}`
+downloads one, `DELETE /project/{id}/backup/{serviceStackId}/{date}` removes it (via `zops api`).
+
 Backups are encrypted end-to-end with a per-project X25519 key and decrypted only on download.
 After a service or project is deleted, backups survive a **7-day grace period** — then the key is
 destroyed and the data is unrecoverable.
@@ -304,9 +349,10 @@ zsc backup-create db
 
 It takes a service name and nothing else. **It cannot set tags**, so a headless backup is untagged —
 and per the retention rules above, an untagged manual backup gets no automatic time tag and can be
-pruned. To take a genuinely protected pre-migration backup, tag it in the GUI (**Backups List &
-Configuration**) right after creating it, or create it there in the first place. Listing, deletion,
-retention and download are GUI-only regardless.
+pruned. To take a genuinely protected pre-migration backup from outside, use
+`zops backup create db --tag <protected-tag>` (or `zops backup tag` afterwards); otherwise tag it in
+the GUI (**Backups List & Configuration**). `zops backup` also lists, deletes, configures retention
+and issues download URLs — only restore has no API.
 
 ### Restoring
 
@@ -317,8 +363,8 @@ from the GUI, then:
 |---|---|---|
 | PostgreSQL | `.zip` of per-schema `pg_dump -Fc` dumps | `pg_restore -d db <schema>.dump` per schema. Plain `psql` cannot read these — convert first with `pg_restore -f schema.sql <schema>.dump` if you need SQL |
 | MariaDB | `.xb.gz` (`mariabackup`, xbstream + gzip) | mariabackup restore — **not** a `mysqldump` file |
-| Shared storage | `.tar.gz` | `tar -xzf backup.tar.gz -C /mnt/<hostname>` from a runtime container that has it mounted. Not through the Filer UI, which caps uploads at 64 MB |
-| Elasticsearch | `.gz` (elasticdump) | elasticdump |
+| Local storage | `.tar.gz` of the live volume | `tar -xzf backup.tar.gz -C /data` in the storage's own container, or `-C <mountPath>` in a runtime that mounts it. A live DB file in it may be torn — restore the app-level copy |
+| SeaweedFS | `.tar.gz` of the whole filesystem | `tar -xzf backup.tar.gz -C /mnt/<hostname>` from a runtime container that has it mounted. Not through the filer HTTP API, which caps uploads at 64 MB |
 | Meilisearch | `.dump` | Meilisearch import |
 | Qdrant | `.snapshot` | Qdrant snapshot restore |
 | NATS | `.tar.gz` | extract |
@@ -454,7 +500,8 @@ then restart the service. Traces appear in Kibana under *Applications → Traces
 
 **Stateless design**
 
-- Uploads in object storage, sessions in Valkey, no local state.
+- Uploads in object storage, sessions in Valkey, no local state. SQLite or a single-node stateful
+  app goes on a Local storage volume — and then it is not HA.
 
 **Framework specifics**
 
@@ -475,3 +522,22 @@ then restart the service. Traces appear in Kibana under *Applications → Traces
 4. Mailpit is not an SMTP provider.
 5. Debug mode leaks secrets.
 6. Without health checks the balancer cannot route around an unhealthy container.
+
+## Billing and stopped projects
+
+Zerops is prepaid. Resource usage is billed per minute and deducted hourly; the project core and a
+dedicated IPv4 are **monthly subscriptions charged in advance**, renewing on the creation anniversary
+(not the calendar month) even if that takes the balance below zero. Every refund is promo credit.
+
+- **The core is charged while the project exists — stopped or not.** Only deleting the project ends
+  it (unused rest refunded as promo credit). Creating a project is refused if the balance would not
+  stay above zero after its first month.
+- **Out of credit, Zerops may stop the project**: services stop and the **dedicated IPv4 is
+  released**. A top-up does **not** restart it — run `zops project start` (or **Start project** /
+  `PUT /project/{id}/start`), which needs a positive balance.
+- **Starting does not bring the IPv4 back.** Activate it again; within the paid period it is reused
+  free, but **the address may differ** — recheck the DNS A records of every custom domain.
+- Releasing an IPv4 (`zops project ipv4 release`, GUI **Add-ons**) falls back to the shared
+  IPv4 at once; the paid period stays with the organization for any project to reuse. One dedicated
+  IPv4 per project; the fee is never refunded.
+- Turn on automatic top-ups so production never hits the stop path.

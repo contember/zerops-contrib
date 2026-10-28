@@ -51,7 +51,27 @@ Which keys are legal in `run` depends on the service type. Getting this wrong bl
 | Types | `nodejs`, `bun`, `deno`, `go`, `python`, `rust`, `java`, `dotnet`, `elixir`, `gleam`, `alpine`, `ubuntu` | `php-apache`, `php-nginx`, `nginx`, `static` |
 | `start` / `startCommands` | **Required** — you launch the process | **Do not set** — the platform starts the server |
 | `ports` | **Required** to be reachable | **Do not set** — the HTTP port is implicit |
-| Specific keys | — | `documentRoot`, `siteConfigPath`, `routing` (static only) |
+| Specific keys | — | see below |
+
+Webserver keys are **not interchangeable** between the three, and a wrong one is ignored without an
+error:
+
+| | `static` | `nginx` | `php-nginx` / `php-apache` |
+|---|---|---|---|
+| Document root | `routing.root` (`documentRoot` ignored) | `documentRoot` | `documentRoot` |
+| Redirects, headers, CORS | `routing` | your own config via `siteConfigPath` (`routing` ignored) | own config |
+| `siteConfigPath` | used only when `routing` is absent | yes | yes |
+| `proxy_pass`, caching, extra ports | no | yes | — |
+| Prerender.io (`PRERENDER_TOKEN`) | built in | not built in | — |
+
+You rarely need nginx just to send `/api` to a backend: the project's L7 balancer routes public
+paths to services (see `networking.md`).
+
+`nginx` defaults: SPA fallback to `/index.html` (200 for missing paths), but **no extensionless
+`.html` resolution** unlike `static`; 10 GB body limit. A `siteConfigPath` file **replaces the whole
+`server` block** — start from a copy of the default, keep its `access_log`/`error_log` or logs vanish
+from Zerops, and keep the file outside `documentRoot`, which is served publicly. A missing file fails
+the deploy.
 
 A webserver runtime with subdomain access enabled gets its subdomain automatically; there is no
 port to declare. A minimal static service is:
@@ -64,7 +84,7 @@ zerops:
       buildCommands: [npm ci, npm run build]
       deployFiles: dist/~        # note the ~ — see deployFiles below
     run:
-      base: static
+      base: static               # = alpine/static
 ```
 
 And a PHP service:
@@ -85,26 +105,35 @@ zerops:
 ## `setup` and `extends`
 
 - **`setup`** *(string, required)* — hostname of an existing Zerops service.
-- **`extends`** *(string | list, optional)* — inherit from another `setup` in the same file.
-  Merging is **per section** (`build`, `run`, `deploy`); a redefined section overrides the parent's.
-  With multiple parents (`extends: [base, logging]`) later parents win.
+- **`extends`** *(string | list, optional)* — inherit from another `setup` in the same file. The
+  child is a deep copy of the parent with its own keys applied on top, **recursively, key by key**:
+  - **Objects** (`build`, `run`, `deploy`, `healthCheck`, `routing`, …) merge — a child
+    `run: { start: x }` keeps the parent's `run.ports` and `run.envVariables`.
+  - **Maps** (`envVariables`) merge per key. `KEY: null` removes an inherited variable (`""` is a
+    real empty value); `envVariables: null` drops the whole inherited map.
+  - **Lists** (`buildCommands`, `initCommands`, `deployFiles`, `ports`, `startCommands`, `crontab`,
+    `cache`) are **replaced whole, never appended** — repeat the full list. `[]` clears it.
+  - Chains resolve in any file order (max 25 levels); a setup cannot extend itself.
+  - `extends: [base, logging]` resolves as if `logging` extended `base` and the child extended
+    `logging`: later parents win, the child's own keys win over all.
 
 ```yaml
 zerops:
   - setup: base
-    build: { buildCommands: [npm run build], deployFiles: ./dist }
-    run: { start: npm start }
+    build: { base: nodejs@22, buildCommands: [npm ci, npm run build], deployFiles: ./dist }
+    run: { base: nodejs@22, start: npm start, envVariables: { LOG_LEVEL: info, NODE_ENV: development } }
   - setup: prod
     extends: base
-    run: { envVariables: { NODE_ENV: production } }
+    build: { buildCommands: [npm ci, npm run build -- --mode=production] }  # list replaced; deployFiles inherited
+    run: { envVariables: { NODE_ENV: production, LOG_LEVEL: null } }        # NODE_ENV overridden, LOG_LEVEL removed
 ```
 
 ## `build`
 
 | Key | Type | Notes |
 |---|---|---|
-| `base` | string \| list | **Required.** Build technology, e.g. `nodejs@22`. A list installs several. |
-| `os` | enum | `alpine` (default) or `ubuntu`. |
+| `base` | string \| list | **Required.** Build technology, e.g. `nodejs@22`. The OS is part of the value: `ubuntu/nodejs@22`, `alpine/nodejs@22`; bare means Alpine. A list installs several. |
+| `os` | enum | **Deprecated** — put the OS prefix into `base` instead. |
 | `prepareCommands` | list | Install extra tooling into the build image. Cached; runs in `/home/zerops`. |
 | `buildCommands` | list | Compile/bundle. Runs in `/build/source`. |
 | `deployFiles` | string \| list | **Required.** What lands in `/var/www` at runtime. |
@@ -182,7 +211,7 @@ and verify they arrived (`ls /var/www` over SSH or the web terminal).
 
 Restore is **no-clobber — repository files win** over cached files of the same path.
 
-Changing `build.os`, `build.base`, `build.prepareCommands` or `build.cache` invalidates **both**
+Changing `build.base` (OS prefix included), `build.prepareCommands` or `build.cache` invalidates **both**
 cache layers (base + build). See `pipeline.md`.
 
 ## `deploy`
@@ -196,8 +225,8 @@ cache layers (base + build). See `pipeline.md`.
 
 | Key | Type | Notes |
 |---|---|---|
-| `base` | string | Runtime technology. If omitted, the current version is kept. |
-| `os` | enum | `alpine` (default) or `ubuntu`. Must be compatible with `base`. |
+| `base` | string | Runtime technology, OS-prefixed like `build.base` (`ubuntu/nodejs@22`). If omitted, the current version is kept. **A deploy rewrites the service's OS to the one in `run.base`** — use the same prefix in build and run. |
+| `os` | enum | **Deprecated** — use the OS prefix in `base`. |
 | `ports` | list | Internal ports the app listens on. |
 | `prepareCommands` | list | Builds a **custom runtime image**. Cached; runs in `/home/zerops`. Deploy files are NOT available here. |
 | `initCommands` | list | Runs on **every** container start/restart, in `/var/www`, before `start`. Deploy-gating. |
@@ -207,9 +236,10 @@ cache layers (base + build). See `pipeline.md`.
 | `envReplace` | object | Placeholder substitution inside deployed files. |
 | `healthCheck` | object | Continuous liveness monitoring. |
 | `crontab` | list | Scheduled commands inside the container. |
-| `documentRoot` | string | Web root, **relative to `/var/www`** — write `public`, not `/var/www/public`. Webserver runtimes only. |
-| `siteConfigPath` | string | Custom webserver config, path relative to `/var/www`; the file must be in `deployFiles`. Webserver runtimes only. |
-| `routing` | object | Redirects/headers/CORS — **static services only**. |
+| `documentRoot` | string | Web root, **relative to `/var/www`** — write `public`, not `/var/www/public`. `nginx` and PHP only; **ignored on `static`** (use `routing.root`). |
+| `siteConfigPath` | string | Custom webserver config, path relative to `/var/www`; the file must be in `deployFiles`. A `.tmpl` file is rendered (`{{.DocumentRoot}}`, `{{.Environment.NAME}}`), anything else is used verbatim. `nginx`, PHP, and `static` when `routing` is absent. |
+| `routing` | object | Root, redirects, headers, CORS — **`static` only**; ignored elsewhere, `nginx` included. |
+| `volume` | object | Mounts a Local Storage volume: `{ hostname, mountPath, readOnly }`. See below. |
 
 ### `initCommands` vs `prepareCommands`
 
@@ -237,7 +267,25 @@ is never activated, and the previous version keeps serving. The *service* status
 `ACTIVE` — diagnose via `appVersion.status` and a null `activationDate`, not service status.
 
 Do not put application code in the runtime-prepare image; deploy files arrive separately.
-Shared-storage mounts are not available during the prepare phase.
+Local Storage volumes and start commands (e.g. a SeaweedFS mount) are not available during the
+prepare phase.
+
+### `volume` — Local Storage
+
+```yaml
+run:
+  volume:
+    hostname: vol         # Local Storage service in the same project
+    mountPath: /srv/data  # optional, default /mnt/{hostname}
+    readOnly: false       # optional
+```
+
+- Run phase only — **not** in build or `run.prepareCommands`.
+- The volume survives deploys; new containers get the same volume.
+- **All containers of every service mounting the volume are placed on the physical machine that
+  holds it.** One volume per service at most.
+- System directories (`/etc`, `/var`, `/var/www`, `/tmp`, …) are rejected as `mountPath`; their
+  subdirectories are fine.
 
 ## Ports
 
@@ -276,7 +324,9 @@ run:
         - litestream restore -if-replica-exists -if-db-not-exists -config=litestream.yaml $DB_NAME
 ```
 
-Only `command` is required per entry; `name` labels the process in logs.
+Only `command` is required per entry. `name` labels the process in logs, `workingDir` defaults to
+`/var/www`, and `user` (default `zerops`) runs the command and its `initCommands` as another system
+user — which must already exist, so create it in `run.prepareCommands`.
 
 For a service with no natural foreground process (a container you only SSH into, or a worker
 started elsewhere), use `start: zsc noop --silent` to keep the container alive.
@@ -375,45 +425,78 @@ config files that cannot read env vars.
 **Directory targets do not recurse.** `./config/` processes only files directly in `config/`, not
 `config/jwt/`. List each subdirectory explicitly.
 
+Not the same as `zsc env-replace`, which renders `{{.VAR}}` Go templates from a source path into a
+separate target path, at any time (e.g. from `initCommands`).
+
 ## `routing` (static services only)
 
-**SPA routing needs no configuration.** A static service already falls back through `$uri` →
-`$uri.html` → `$uri/index.html` → `/index.html` → 404, and upstream states plainly that SPAs work
-out of the box and *"you don't need to add any custom redirects for client-side routing to work."*
+**SPA routing needs no configuration.** A static service resolves every request as `$uri` →
+`$uri.html` → `$uri/index.html` → `/index.html` → 404. Consequence: **a missing path returns
+`/index.html` with 200, not 404.** Other built-ins: port 80 only, `/.git` → 404, gzip for text,
+Prerender.io once `PRERENDER_TOKEN` is set. It **cannot proxy** — a redirect to an API is a browser
+redirect; for one domain serving frontend and API use L7 balancer routing or the `nginx` service.
 
-A catch-all `/*` → `/index.html` **redirect** is therefore at best redundant. It is also risky:
-`redirects` emit an HTTP 3xx rather than serving the fallback internally, so a rule broad enough to
-match every path also matches `/assets/app.js`. Upstream does not document this failure mode — but
-the fallback above already does the job, so there is no reason to find out. Use `routing` only for
-genuine redirects, headers and CORS.
+**Do not add a catch-all `/*` → `/index.html`.** With `status` it 3xx-redirects every path; without
+`status` it is a masked redirect that serves `index.html` for every path. Either way it also matches
+`/assets/app.js` and breaks the assets — and the fallback above already does the job.
 
 ```yaml
 run:
+  base: static
   routing:
-    root: /custom/root
+    root: dist                 # relative to /var/www; the static equivalent of documentRoot
     cors: "'*' always"
     redirects:
-      - from: /old-page
+      - from: /old-page        # exact path only
         to: /new-page
         status: 301
-      - from: /blog/*
-        to: /articles/
+      - from: /blog/*          # prefix
+        to: /articles/         # end with / when preservePath is on
         preservePath: true
         preserveQuery: true
         status: 302
+      - from: https://old-domain.com/*
+        to: https://new-domain.com   # no trailing / with an absolute from
+        status: 301
+        preservePath: true
     headers:
-      - for: "/*"
+      - for: "/*"              # "/" would match the homepage only
         values:
-          X-Frame-Options: "'DENY'"
-          Content-Security-Policy: '"default-src ''self''"'
+          X-Frame-Options: "'DENY' always"
+          Content-Security-Policy: '"default-src ''self''" always'
 ```
 
-- `cors` sets `Access-Control-Allow-Origin/Methods/Headers/Expose-Headers`; `"*"` is converted to `'*'`.
-- `redirects[]`: `from` (required, `*` wildcard), `to` (required), `status` (required for absolute
-  URLs), `preservePath`, `preserveQuery`.
-- `headers[]`: `for` (path pattern, required), `values` (map, required).
+**Matching** (`from` and `for` share it):
 
-Silently ignored on non-static services.
+- Without `*` the rule matches that exact path (`/about` — not `/about/`, not `/about/team`). A
+  trailing `*` matches the prefix (`/blog/*` — not `/blog`). `*` works **only at the end**:
+  `/*.html` and `/*/edit` are not supported.
+- Order: absolute redirects (matched on the request domain) → exact paths → prefixes, longest first
+  → the default fallback.
+- An absolute `from` is a case-insensitive **substring** match on host + path:
+  `https://old-domain.com/*` also matches `www.old-domain.com` and every other subdomain.
+  `https://*.old-domain.com/*` matches subdomains only. Only `301`/`302` are allowed there.
+
+**Redirects:**
+
+- Omitting `status` makes a **masked redirect** — the target is served under the original URL.
+  `preservePath`/`preserveQuery` are not allowed on it; the deploy fails with
+  `Preserve path must not be set for masked redirects`.
+- `status` is required whenever `from` or `to` is absolute.
+- Without `preserveQuery` the query string is dropped.
+
+**Headers:**
+
+- **Only the single best-matching rule applies — rules are not merged.** With `/*` and `/docs/*`,
+  `/docs/page` gets only the `/docs/*` headers; repeat site-wide headers in specific rules.
+- A redirect response gets only `cors` headers, not those of a broader `/*` rule; add a header rule
+  with the same path as the redirect's `from`.
+- Values go into `add_header` verbatim — include the quotes, and `always` for headers that must be on
+  error responses too.
+- `cors` sets Allow-Origin, -Methods, -Headers and Expose-Headers to the **same** value; `"*"` is
+  converted to `'*'`. Use `headers` for different values.
+
+`routing` is regenerated on every deploy, and silently ignored on non-static services.
 
 ## PHP runtime tuning
 
@@ -496,15 +579,24 @@ runtime crash. Commonly missing from the build base: `ext-pcntl`, `ext-posix` (L
 ## Gotchas
 
 1. `run` is required; `build` and `deploy` are optional (a service can be deploy-only).
-2. There is **no `mount` key in `zerops.yaml`** — shared storage is attached via the `mount:` field
-   in the *import* YAML, in the GUI, or with `zsc shared-storage mount`. Upstream documents `mount:`
-   only for the import YAML and never lists it under `run`. **Verified live: a stray `run.mount`
+2. There is **no `mount` key in `zerops.yaml`.** Storage is attached one of two ways:
+   - **Local Storage** — `run.volume` (above).
+   - **SeaweedFS** (what every former shared-storage service became) — mounted by the service
+     itself, as a `run.startCommands` entry:
+     `command: sudo zsc shared-storage mount <hostname>` (mounts at `/mnt/<hostname>`). When
+     `initCommands` already need the files, mount there instead with `--background` — a start
+     command runs after them. Nothing restarts a background mount that dies.
+
+   Shared Storage is deprecated: the import `mount:` field is **rejected** (`yamlMountDeprecated`)
+   and the GUI connections page is gone. Old services still get a best-effort managed mount from the
+   `zeropsSharedStorageMounts` env var; to take it over, delete that variable **before** deploying
+   the start-command mount, or both mount the same directory. **Verified live: a stray `run.mount`
    (even pointing at a nonexistent storage) is silently accepted — the deploy goes `ACTIVE`, no
    mount, no warning.** More broadly, **unknown keys under `run` are not rejected** (a bogus
    `thisKeyDoesNotExist: true` also deploys clean), so a typo'd key never announces itself. Rely on
    schema validation in the editor, not on the deploy to catch it.
 3. PHP uses different build and run bases: build `php@8.4`, run `php-nginx@8.4` or `php-apache@8.4`.
-4. Deno has no Alpine build — it requires `os: ubuntu`.
+4. Deno has no Alpine build — use `ubuntu/deno@X` in both `build.base` and `run.base`.
 
 Variable timing (`run.envVariables` ⇒ redeploy, secrets ⇒ restart) and the
 `userDataDuplicateKey` collision are in [`env-variables.md`](env-variables.md#when-changes-take-effect).

@@ -103,7 +103,24 @@ UPSTREAM_SOURCES=(
   "apps/docs/content/guides/firewall.mdx|references/networking.md"
   "apps/docs/content/guides/smtp.mdx|references/networking.md"
   "apps/docs/content/guides/public-access.mdx|references/networking.md"
-  "apps/docs/content/guides/shared-storage-integration.mdx|references/operations.md"
+  "apps/docs/content/guides/seaweedfs-integration.mdx|references/operations.md"
+  "apps/docs/content/seaweedfs/overview.mdx|references/service-catalog.md"
+  "apps/docs/content/seaweedfs/how-to/migrate-from-shared-storage.mdx|references/operations.md"
+  "apps/docs/content/shared-storage/overview.mdx|references/service-catalog.md"
+  "apps/docs/content/storage/overview.mdx|references/service-catalog.md"
+  "apps/docs/content/guides/choose-storage.mdx|references/service-catalog.md"
+  "apps/docs/content/local-storage/overview.mdx|references/service-catalog.md"
+  "apps/docs/content/local-storage/tech-details.mdx|references/service-catalog.md"
+  "apps/docs/content/local-storage/how-to/connect.mdx|references/service-catalog.md"
+  "apps/docs/content/local-storage/how-to/manage.mdx|references/operations.md"
+  "apps/docs/content/local-storage/how-to/migrate-from-shared-storage.mdx|references/operations.md"
+  "apps/docs/content/swarm/overview.mdx|references/service-catalog.md"
+  "apps/docs/content/swarm/how-to/create.mdx|references/service-catalog.md"
+  "apps/docs/content/swarm/how-to/connect.mdx|references/service-catalog.md"
+  "apps/docs/content/swarm/how-to/deploy.mdx|references/service-catalog.md"
+  "apps/docs/content/swarm/how-to/use.mdx|references/service-catalog.md"
+  "apps/docs/content/features/scaling.mdx|references/operations.md"
+  "apps/docs/content/billing/overview.mdx|references/operations.md"
   "apps/docs/content/static/overview.mdx|references/zerops-yaml.md"
   "apps/docs/content/php/how-to/build-pipeline.mdx|references/zerops-yaml.md"
   "apps/docs/content/nodejs/how-to/build-pipeline.mdx|references/zerops-yaml.md"
@@ -249,6 +266,7 @@ table("Runtimes", [
 table("Static, containers and VMs", [
     ("nginx", imp("nginx")), ("static", imp("static")),
     ("Alpine", imp("alpine")), ("Ubuntu", imp("ubuntu")), ("Docker", imp("docker")),
+    ("Swarm", imp("swarm")),
     ("Box Workspace", imp("zbox")),
 ])
 
@@ -269,7 +287,7 @@ table("Message brokers", [
 
 table("Storage", [
     ("Object storage", imp("objectstorage")),
-    ("Shared storage", imp("sharedstorage")),
+    ("Local storage", imp("localstorage")),
     ("SeaweedFS", imp("seaweedfs")),
 ], header="Storage")
 
@@ -286,7 +304,7 @@ KNOWN = {
     "bun", "deno", "elixir", "gleam", "java", "nginx", "static", "docker",
     "mariadb", "postgresql", "keydb", "valkey", "qdrant", "nats", "kafka",
     "elasticsearch", "meilisearch", "typesense", "rabbitmq", "clickhouse",
-    "seaweedfs", "sharedstorage", "objectstorage", "zbox",
+    "seaweedfs", "localstorage", "objectstorage", "swarm", "zbox",
 }
 unmapped = sorted(set(data) - KNOWN)
 if unmapped:

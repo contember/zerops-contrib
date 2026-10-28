@@ -31,7 +31,8 @@ webhook build.
 
 A temporary build container is created and destroyed afterwards, regardless of outcome.
 
-1. **Container creation** — from `build.base` + `build.os` (default Alpine).
+1. **Container creation** — from `build.base`. The OS is part of it (`ubuntu/nodejs@22`); a bare
+   `nodejs@22` resolves to Alpine. The `os:` key is deprecated.
 2. **Source download** — from GitHub, GitLab, or the `zcli` upload, into `/var/www`.
 3. **Cache restoration** — cached files moved into `/build/source`, **no-clobber: repository files
    win**.
@@ -49,8 +50,8 @@ A temporary build container is created and destroyed afterwards, regardless of o
 | RAM | 8 GB | 8 GB (fixed) |
 | Disk | 1 GB | 100 GB |
 
-Build containers start small and scale up automatically. They are **not charged separately** —
-covered by the project fee. The whole pipeline has a hard **60-minute** limit with no retry.
+Build containers start small and scale up automatically. They are **not charged separately**, but
+build time is **limited** by the project core plan; more can be bought. The whole pipeline has a hard **60-minute** limit with no retry.
 
 ### Command semantics
 
@@ -71,7 +72,7 @@ Two layers:
 
 The layers are **coupled** — invalidating the base layer also invalidates the build layer.
 
-Any change to `build.os`, `build.base`, `build.prepareCommands` or `build.cache` invalidates both.
+Any change to `build.base` (including its OS prefix), `build.prepareCommands` or `build.cache` invalidates both.
 Adding `vim` to `prepareCommands` throws away your cached `node_modules`.
 
 Manual invalidation: GUI → service → *Pipelines & CI/CD Settings* → **Invalidate build cache**.
@@ -96,20 +97,21 @@ Cache lock files alongside dependency directories so installs stay reproducible.
 Optional. Runs after build, before deploy, whenever `run.prepareCommands` is defined. Produces a
 **custom runtime image** with extra system packages.
 
-1. Prepare container created from `run.os` + `run.base`.
+1. Prepare container created from `run.base` (OS included).
 2. Files from `build.addToRunPrepare` copied to `/home/zerops/`.
 3. `run.prepareCommands` executed in order.
 4. Container snapshotted as the runtime image.
 5. Image cached for subsequent deploys.
 
-The image is reused unless it is the first deploy, or `run.os` / `run.base` /
+The image is reused unless it is the first deploy, or `run.base` /
 `run.prepareCommands` / the contents of `build.addToRunPrepare` changed, or the cache was cleared
 manually (*Pipelines & CI/CD settings* → **Clear runtime prepare image**).
 
 Use it for: system libraries (`sudo apk add imagemagick`), C-extension dependencies, system tools.
 
-**Do not** put application code in the runtime image — deploy files arrive separately. Shared
-storage is not mounted during this phase.
+**Do not** put application code in the runtime image — deploy files arrive separately. Local
+Storage volumes are not mounted and start commands (a SeaweedFS `weed mount`) do not run during
+this phase.
 
 ## Deploy phase
 

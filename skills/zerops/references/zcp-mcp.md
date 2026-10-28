@@ -45,7 +45,6 @@ in any of them — for anything none of these expose, call the [REST API](cli.md
 | Change CPU / RAM / disk / CPU mode / container count | **no command** | `zerops_scale` |
 | Read or write env variables | read-only `project env` | `zerops_env` |
 | Enable / disable subdomain access | `service enable-subdomain` (enable only) | `zerops_subdomain` |
-| Connect shared storage | **no command** | `zerops_manage` |
 | Read service events / deploy history | **no command** | `zerops_events` |
 | Health / HTTP-readiness probe | **no command** | `zerops_verify` |
 | Export a project or service as YAML | **no command** | `zerops_export` |
@@ -80,7 +79,7 @@ Mutating:
 |---|---|
 | `zerops_deploy` | Build + deploy through the Zerops pipeline; returns build/deploy evidence |
 | `zerops_env` | Read, set, delete, generate env vars and local `.env` files |
-| `zerops_manage` | Start, stop, restart, reload, connect storage |
+| `zerops_manage` | Start, stop, restart, reload, connect storage (shared storage is retired — the platform no longer has storage connections, see [`service-catalog.md`](service-catalog.md)) |
 | `zerops_scale` | CPU, RAM, disk, CPU mode, container autoscaling |
 | `zerops_subdomain` | Enable/disable public subdomain access |
 | `zerops_delete` | Delete a service — **explicit named approval required** |

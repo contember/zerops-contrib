@@ -10,14 +10,16 @@ environment variables.
 - [HA variants and profiles](#ha-variants-and-profiles)
 - [Generated environment variables](#generated-environment-variables)
   - [PostgreSQL](#postgresql) · [MariaDB](#mariadb) · [Valkey](#valkey) · [KeyDB](#keydb-legacy)
-  - [Object storage](#object-storage) · [Search engines](#search-engines)
+  - [Object storage](#object-storage) · [Local storage](#local-storage) · [SeaweedFS](#seaweedfs)
+  - [Search engines](#search-engines)
   - [Administering a database](#administering-a-database) · [Platform variables](#platform-variables)
+- [Swarm — pools of containers you drive over HTTP](#swarm--pools-of-containers-you-drive-over-http)
 - [Version tables](#version-tables)
 
 ## Two different version strings
 
 - **`type:` in import YAML** — provisions the service. Includes the deployment variant:
-  `postgresql:ha@18`, `shared-storage:single`, `php-nginx@8.4`.
+  `postgresql:ha@18`, `seaweedfs:ha@3.85`, `php-nginx@8.4`.
 - **`base:` in `zerops.yaml`** — selects the build/run toolchain: `nodejs@22`, `php@8.4`
   (build) vs `php-nginx@8.4` (run).
 
@@ -41,29 +43,33 @@ the same underlying version.
 | Advanced / HA search | Elasticsearch | Multi-node, plugins, JVM tuning |
 | Autocomplete with HA | Typesense | 3-node Raft, CORS built in |
 | Vector / similarity | Qdrant | HTTP + gRPC, cluster replication, internal-only |
-| Files that outlive a deploy | Object storage (S3/MinIO) | Container disk is replaced on deploy. Not covered by Zerops backups |
-| Shared POSIX filesystem | Shared storage | Mounted at `/mnt/<hostname>` across containers |
+| Uploads, media, backups — files that outlive a deploy | **Object storage** (S3/MinIO) | Container disk is replaced on deploy. Not covered by Zerops backups |
+| A real filesystem: SQLite, Prometheus, Gitea, certs shared between services | **Local storage** | Single-kernel POSIX — locking, mmap, inotify correct across containers. Not HA; pins every connected service to one machine |
+| HA network filesystem shared between services | SeaweedFS | You mount it yourself (`weed mount`). Per-mount locks — **never a database on it** |
+| Shared POSIX filesystem | ~~Shared storage~~ | **Deprecated** — every one was converted to SeaweedFS; see [SeaweedFS](#seaweedfs) |
 | Static site | `static` | Build on `nodejs@latest`, run on `static` |
 | Reverse proxy / custom webserver | `nginx` | |
 | Pre-built container image | `docker` | Runs in a **VM**; no autoscaling; needs `--network=host` |
 | Plain Linux box | `alpine` / `ubuntu` | Full autoscaling, same as runtimes |
 | Sandboxes for AI agents | Box Workspace (`zbox@1`) | One VM hosting Firecracker microVMs; managed via `zbox`, not `zerops.yaml`. See [`zbox.md`](zbox.md) |
+| Pool of containers or VMs your code creates, leases, `exec`s into and removes (CI jobs, per-task workspaces) | Swarm (`swarm@1` / `swarm-vm@1`) | Synchronous HTTP API inside the project, no Zerops API round trip. **Not Docker Swarm.** See [Swarm](#swarm--pools-of-containers-you-drive-over-http) |
 
 ### Runtime base OS
 
-Default to **Alpine**. Switch to Ubuntu only for glibc needs: CGO-enabled Go, glibc-built Python
-C-extension wheels, or **Deno** (no Alpine build exists). Needing a package is *not* a reason —
-both install packages (`sudo apk add` / `sudo apt-get install`).
+Prefer **Alpine**. Switch to Ubuntu (26.04 LTS; 24.04 and 22.04 also available) only for glibc
+needs: CGO-enabled Go, glibc-built Python C-extension wheels, or **Deno** (Ubuntu image only).
+Needing a package is *not* a reason — both install packages (`sudo apk add` / `sudo apt-get install`).
 
-**A bare version string is expanded to an OS-qualified one, and build and run need not agree.**
+**The OS is part of the base identifier — always write it**: `alpine/<tech>@<ver>` or
+`ubuntu/<tech>@<ver>`, the same value in the import `type` and in both `build.base` and `run.base`.
+A bare `<tech>@<ver>` is legacy and resolves differently per file: import → Ubuntu,
+`zerops.yaml` → Alpine. And `run.base` **rewrites the service's OS on every deploy**.
+
 Verified live: `type: bun@1.3.9` produced a service reporting
 `serviceStackTypeVersionName: ubuntu/bun@1.3.9`, while the same string as `base:` resolved the build
-to `alpine/bun@1.3.9` (visible as the appVersion's `base`). Two consequences:
-
-- Anything comparing a declared `type` against the live one must treat a declaration with no OS
-  prefix as matching any prefix, or it reports drift on a service it just created from that file.
-- If your app cares which libc it runs on, name the OS explicitly on both sides rather than assuming
-  one bare string gives you one distribution.
+to `alpine/bun@1.3.9` (visible as the appVersion's `base`). So anything comparing a declared `type`
+against the live one must treat a declaration with no OS prefix as matching any prefix, or it reports
+drift on a service it just created from that file.
 
 ## HA variants and profiles
 
@@ -84,9 +90,11 @@ exists, `mode:` remains the documented and only way to get HA.
 
 | Service | HA mechanism |
 |---|---|
-| PostgreSQL, MariaDB, ClickHouse, Valkey, shared storage, SeaweedFS | `:single` / `:ha` type variant |
+| PostgreSQL, MariaDB, ClickHouse, Valkey | `:single` / `:ha` type variant |
+| SeaweedFS | `:single` / `:ha` variant, but `:ha` is **2** containers (1:1 replication) |
 | Elasticsearch, Typesense, Kafka | `mode: HA` — **not** deprecated here, no variant exists |
 | Meilisearch, Qdrant, object storage | single node only |
+| Local storage | `local-storage:single@1` only — no HA mode yet |
 
 The generated version tables below come from the docs site's `data.json`, which still lists the
 variant-capable services in their bare form (`mariadb@10.6`, `valkey@7.2`, `clickhouse@25.3`).
@@ -155,6 +163,15 @@ auto-injected. Examples below assume the service hostname `db` / `storage`.
   variable.
 - A system user `zps` exists for maintenance — do not delete it or change its privileges.
 - Changing the password in the database does **not** update the env var. Update both.
+- **`max_connections` follows RAM and cannot be overridden**: 50 per GiB (20–500) for OLTP and
+  WriteHeavy profiles, 25 per GiB (10–200) for OLAP, counted in memory steps (7 GB RAM still gets
+  the 4 GiB limit of 200). 3 are reserved for superusers and Zerops uses up to 4 more. pgBouncer
+  (`6432`) accepts `20 × (max_connections − 4)` clients (≥ 100) but pools into at most
+  `2 × vCPU + 1` server connections per user/database pair; excess transactions queue. Out of
+  connections → use `6432`, or raise minimum RAM to the next step.
+- HA: limits are per node; `5433` balances across both replicas. The two proxies each run a
+  pgBouncer with the full client limit into the same primary, and close connections on
+  `5432`/`5433` idle for 60 minutes.
 
 ### MariaDB
 
@@ -216,6 +233,81 @@ run:
 - `S3_REGION` is required by SDKs and ignored by MinIO; `us-east-1` is fine.
 - Public URL format: `{apiUrl}/{bucketName}/path/to/file`.
 
+### Local storage
+
+`type: local-storage:single@1`. A persistent volume local to **one physical machine**, mounted into
+runtime containers through `run.volume` in `zerops.yaml` — not through env vars or import:
+
+```yaml
+run:
+  volume:
+    hostname: vol          # required; must be a Local Storage service in the project
+    mountPath: /srv/data   # optional, default /mnt/<hostname>; /etc, /var, /var/www, /tmp rejected (subdirs allowed)
+    readOnly: false        # optional
+```
+
+- **Every container of every connected service is scheduled onto the volume's machine.** That ties
+  the runtime services themselves to one host: a hardware failure takes them all down together, and
+  horizontal scaling is capped by that host's free capacity. On failure or maintenance Zerops moves
+  the volume (stop, move, start) and **recovery of the data is not guaranteed** — keep backups on.
+- Real local kernel mount, no FUSE: `flock`/`fcntl` locks, mmap (SQLite WAL), inotify and atomic
+  rename work across containers and services. Still single-writer for SQLite — write from one
+  service, mount `readOnly: true` everywhere else.
+- One volume per runtime service; many services may mount the same one. Runtime containers only —
+  **not in build or prepare**. Applied by a deploy: change or drop `volume` and deploy again.
+- Capacity = the service's max disk in `verticalAutoscaling`. The service's own container has the
+  volume at `/data` (SSH / web shell). A Local Storage service cannot be deleted while a runtime
+  still mounts it.
+- Daily backups are `.tar.gz` of the **live** volume, so database files can be caught mid-write.
+  For SQLite, run a `run.crontab` job (`allContainers: false`) that writes
+  `sqlite3 <db> ".backup /mnt/vol/backup.db"` and let the archive pick that copy up.
+
+### SeaweedFS
+
+`type: seaweedfs:single@3.85` / `seaweedfs:ha@3.85`. Zerops runs the cluster; **mounting is your
+job**. Generated variables: `hostname`, `port` (`8888`).
+
+| Endpoint | Address |
+|---|---|
+| Filer HTTP API + Filer UI | `http://<hostname>.zerops:8888` |
+| Filer gRPC (used by `weed mount`) | `<hostname>.zerops:18888` |
+| One container's filer (`n` = 1 or 2) | `node-stable-<n>.db.<hostname>.zerops:8888` |
+
+No authentication; private network and VPN only, cannot be routed publicly.
+
+```yaml
+run:
+  startCommands:
+    - name: app
+      command: npm start
+    - name: storage                      # supervised: restarted if it exits
+      initCommands:
+        - sudo mkdir -p /mnt/storage
+        - sudo chown zerops:zerops /mnt/storage
+      command: sudo /opt/zerops/bin/weed-3-85 mount -filer=node-stable-1.db.storage.zerops:8888 -dir=/mnt/storage
+```
+
+- Shortcut: `zsc shared-storage mount <hostname>` mounts `/mnt/<hostname>` with RAM-lean tuning
+  (~100–150 MB). A bare `weed mount` caches aggressively and can grow to hundreds of MB. When an
+  `initCommand` needs the files, mount there with `sudo zsc shared-storage mount <hostname> --background`
+  — but **nothing restarts a background mount** if it dies, and a lost mount does not fail the health
+  check.
+- **Per-mount locks and an append-only store: never SQLite, Prometheus or any file-based database**
+  (corruption once two containers touch it). Small in-place modifications cause heavy write
+  amplification.
+- **Data capped at 60 GB** regardless of the disk setting. HTTP API uploads cap at 64 MB per file
+  (mounts have no such limit). `df` inside a mount lies; read usage in the GUI.
+- Not mounted during build or runtime prepare.
+- In `:ha`, replacing the master container makes the cluster unavailable for ~30 s.
+
+**Shared Storage is gone.** Every Shared Storage service was converted in place into SeaweedFS
+(same hostname and data). `shared-storage:single` / `:ha` in an import still works and creates
+SeaweedFS. The import `mount:` field and the GUI connections page are removed — `mount:` fails with
+`yamlMountDeprecated`. Old mounts survive best-effort through the `zeropsSharedStorageMounts` env
+(`|`-separated hostnames, mounted at `/mnt/<hostname>` on start, deprecation warning in the runtime
+log). Migrate: add the mount start command above, delete that env, deploy. For anything that needs
+real locking, move the data to Local Storage instead.
+
 ### Search engines
 
 | Service | Keys |
@@ -272,13 +364,62 @@ mysqldump -h db -u db -p db > dump.sql
 Inside containers: `ZEROPS_StackName` (service name), `ZEROPS_appVersionId` (current app version —
 a good `zsc execOnce` key), `ZEROPS_PROMETHEUS_PORT` (metrics port on managed services).
 
+## Swarm — pools of containers you drive over HTTP
+
+`swarm@1` (Ubuntu 26.04 containers) or `swarm-vm@1` (Docker VMs, for an own kernel or running
+Docker). **Zerops Swarm is not Docker Swarm.** Type and hostname are fixed after creation. Compare
+Box Workspace (`zbox@1`, [`zbox.md`](zbox.md)): Swarm containers are ordinary Zerops containers in
+the project, sharing the host kernel unless you pick the VM type.
+
+```yaml
+services:
+  - hostname: sandbox
+    type: swarm@1
+    startWithoutCode: true   # usable without a first deploy
+    minContainers: 0         # kept by Zerops; API refuses removals below it
+    maxContainers: 10        # API refuses creates above it; stopped containers count
+```
+
+`swarm-vm@1` takes fixed `verticalAutoscaling: {cpu, ram, disk}` (default 1 / 1 GB / 5 GB);
+changing them restarts the VM.
+
+- **No load-based horizontal scaling** — `minContainers`/`maxContainers` are limits for your API
+  calls. An orchestrator container serves the API, a web UI and `/swagger` at
+  `http://orch.<hostname>.zerops` (no public address). Create, start, stop, restore and fork are
+  synchronous — give the HTTP client a timeout of minutes for a VM pool.
+- **Auth**: `Authorization: Bearer ${<hostname>_API_TOKEN}` from services; **not needed from the
+  VPN**. `ADMIN_TOKEN` (`X-Swarm-Admin-Token`) only to `force` a container away from its holder.
+  An empty `API_TOKEN` opens the API to the whole private network. Pool containers never see either
+  token. Token edits take effect on **reload** (leaves pool containers alone); restart restarts
+  them all.
+- **Leases**: `POST /container/acquire` → container + `lease`; pass `?lease=` to `exec` and
+  `release`. Set `leaseTtlSeconds`, or a crashed consumer holds its container until an admin forces
+  it. `acquire` errors `containers-preparing` and `all-reserved` are retryable.
+  `POST /container/run` picks or creates one, runs a command, cleans up.
+- `exec` streams NDJSON (`stdout`/`stderr` base64, final `exit` with `exitCode`; a `reason` means
+  something other than the command ended it). One command per container; closing the connection
+  cancels it.
+- **Dirty vs clean**: any command dirties a container; only a reset to the primary snapshot
+  (`release?reset=true`, acquire with `"clean": true`, or empty-body restore) cleans it. Containers
+  Zerops creates to fill `minContainers` have **no primary snapshot, so resetting them fails** — keep
+  the minimum at 0 and create warm containers with `POST /container` if you rely on resets.
+- Snapshots: at most 5 per container; **restoring deletes every newer snapshot**.
+- **Image**: deploy a `zerops.yaml` (`setup: <hostname>`) to it; `prepareCommands` build the image,
+  `run.start` runs in every pool container if set. A deploy **never touches existing containers** —
+  they keep the old image (`current: false`) until `POST /container/rollout`, which cannot run when
+  `minContainers == maxContainers` (`pool-fixed-size`). `swarm-vm@1` accepts only VM bases
+  (`docker@26.1`).
+- SSH from the VPN works; from other services only via `sshIsolation: "vpn service@<name>"` on the
+  Swarm service — and SSH ignores leases.
+- Errors: HTTP 400, read `meta[].metadata.reason` and `retryable`.
+
 ## Version tables
 
 Regenerate with `scripts/sync-docs.sh` at the repository root. Everything between the markers is
 machine-written.
 
 <!-- BEGIN GENERATED: versions -->
-<!-- Generated by scripts/sync-docs.sh from zeropsio/docs@d65d24945926 on 2026-07-31. Do not edit by hand. -->
+<!-- Generated by scripts/sync-docs.sh from zeropsio/docs@dd0a330bc2d9 on 2026-10-28. Do not edit by hand. -->
 
 ### `base:` for `zerops.yaml`
 
@@ -311,7 +452,7 @@ Values for `build.base` and `run.base`.
 | static (run) | `static` / `static@1.0` / `static@latest` |
 | Docker (run) | `docker@26.1` / `docker@latest` |
 | Alpine | `alpine@3.23` / `alpine@latest`<br>`alpine@3.22`<br>`alpine@3.21`<br>`alpine@3.20`<br>`alpine@3.19`<br>`alpine@3.18`<br>`alpine@3.17` |
-| Ubuntu | `ubuntu@24.04`<br>`ubuntu@22.04` / `ubuntu@latest` |
+| Ubuntu | `ubuntu@26.04`<br>`ubuntu@24.04`<br>`ubuntu@22.04` / `ubuntu@latest` |
 
 ### `type:` for the import YAML
 
@@ -342,8 +483,10 @@ Managed services take a `:single` / `:ha` deployment variant where listed. The l
 | nginx | `nginx@1.22` / `nginx@latest` |
 | static | `static` / `static@1.0` / `static@latest` |
 | Alpine | `alpine@3.23`<br>`alpine@3.22`<br>`alpine@3.21`<br>`alpine@3.20`<br>`alpine@3.19`<br>`alpine@3.18`<br>`alpine@3.17` |
-| Ubuntu | `ubuntu@24.04`<br>`ubuntu@22.04` |
+| Ubuntu | `ubuntu@26.04`<br>`ubuntu@24.04`<br>`ubuntu@22.04` |
 | Docker | `docker@26.1.5` |
+| Swarm | `swarm@1`<br>`swarm-vm@1` |
+| Box Workspace | `zbox@1` / `zbox@latest` |
 
 ### Databases
 
@@ -377,7 +520,7 @@ Managed services take a `:single` / `:ha` deployment variant where listed. The l
 | Storage | Versions (newest first, aliases share a row) |
 |---|---|
 | Object storage | `object-storage` |
-| Shared storage | `shared-storage:single` / `shared-storage:ha` |
-| SeaweedFS | `seaweedfs:single@3` / `seaweedfs:ha@3` |
+| Local storage | `local-storage:single@1` |
+| SeaweedFS | `seaweedfs:single@3.85` / `seaweedfs:ha@3.85` |
 
 <!-- END GENERATED: versions -->
