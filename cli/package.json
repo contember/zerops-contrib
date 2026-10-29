@@ -1,6 +1,6 @@
 {
   "name": "zops",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Agent-first CLI for the Zerops API — complete coverage of the public REST surface",
   "type": "module",
   "private": true,

@@ -11,7 +11,7 @@ import { GLOBAL_FLAGS, parseArgs, type CommandSpec, type FlagSpec } from "./lib/
 import { Output } from "./lib/output.ts";
 import { SPEC_VERSION } from "./lib/operations.ts";
 
-export const VERSION = "0.1.0";
+export const VERSION = "0.2.0";
 
 const GLOBAL_VALUE_FLAGS = new Set(GLOBAL_FLAGS.filter((f) => f.type !== "boolean").map((f) => f.name));
 const GLOBAL_VALUE_SHORTS = new Set(
