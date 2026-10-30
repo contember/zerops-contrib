@@ -46,7 +46,7 @@ Ways to reach a workspace:
 
 - **Zerops login** (`zbox workspace authorize <service-id>`): the CLI mints a short-lived access via
   `POST /service-stack/{id}/ui-access` and Zerops adds the API key on the way. No key on disk. No
-  60-second edge timeout, no 50 MiB upload cap. Always acts with the full key.
+  50 MiB upload cap (a time limit still applies to long uploads). Always acts with the full key.
 - **API key or scoped token** (`ZBOX_WORKSPACE_URL` + `ZBOX_API_KEY`, set both or neither; or
   `zbox workspace use <url> --api-key <key-or-token>`): for CI, backends and a sandbox managing its
   own workspace. On the public API URL **requests that send nothing for 60 s end with 504** (a long
@@ -113,7 +113,7 @@ services still reach them with the bare host (see Networking).
 - Before the shutdown all running sandboxes sync their disks at once, then park one by one. Those the
   30 s budget does not reach come back `PARKED` **without memory**: processes gone, written files
   kept. With several large sandboxes, park them yourself first. Only reload keeps them running.
-- **A workspace running since before this platform update needs one reload** (`zops service reload`, not a
+- **A workspace running since before the October 2026 Box release (enforced TTLs, export) needs one reload** (`zops service reload`, not a
   restart) to install it; until then restart, stop and resize still drop sandbox memory. After that
   reload, re-add the bases (Images, below).
 - After a node move to another CPU a memory resume can fail → `FAILED`; `zbox wake` boots it from disk.
@@ -122,7 +122,7 @@ services still reach them with the bare host (see Networking).
 - **No backups of the workspace.** Keep what matters with export (below).
 - Env var edits apply **without** restart (secrets, integration credentials, registry logins),
   except `ZBOX_WORKSPACE_API_KEY`, which takes effect on the next reload. After rotation, logged-in
-  GUI/CLI accesses keep sending the old key for up to an hour → `Missing or invalid Workspace API key`;
+  GUI/CLI accesses keep sending the old key for up to an hour → `Missing or invalid Workspace API key or token`;
   rerun `zbox workspace authorize <id>`.
 - `ZBOX_WORKSPACE_VOLUME_KEY` unlocks the LUKS data disk. Not editable.
 - Orchestrator log: the service's runtime log, tag `zerops-zbox-orchestrator`. It never contains
@@ -181,8 +181,7 @@ zbox remove -y app
   keeps the TTLs. **The API `PUT /sandbox/{id}` replaces the name and both TTLs** — always send all
   three, omitting only what should be cleared.
 - **Removing a sandbox deletes its snapshots** (they still list, but cannot restore). To keep a
-  bootstrap state beyond its sandbox, export it (below). A template from a snapshot does not exist
-  yet — templates come only from a base.
+  bootstrap state beyond its sandbox, export it (below); templates come only from a base.
 - Removed sandboxes stay listable for 7 days (`zbox list --status terminated,archived`), then their
   records, sessions and output are deleted.
 - A disk-only snapshot of a running sandbox misses unflushed writes: `zbox exec app -- sync` first,
@@ -208,8 +207,8 @@ zbox export create app --prefix backups/ --url https://storage-prg1.zerops.io --
 zbox import --export <export-id> --name app-copy       # or --file app.tar.zst, or <bucket key> + bucket flags
 ```
 
-- **A secret-bearing sandbox never exports** — neither it nor any snapshot taken while it held
-  secrets (`secretBearing`). Bootstrap without secrets if the state must be exported.
+- **Secret-bearing sandboxes and their snapshots never export** (Secrets, below) — bootstrap without
+  secrets if the state must be exported.
 - Bucket credentials are **names of workspace env vars**, ending in `_accessKeyId` and
   `_secretAccessKey` (e.g. `BACKUP_accessKeyId: ${storage_accessKeyId}`); the URL is the bare S3
   endpoint. The workspace never deletes bucket objects.
@@ -217,9 +216,11 @@ zbox import --export <export-id> --name app-copy       # or --file app.tar.zst, 
   from an archive this workspace exported, on the same Firecracker, CPU model and base build;
   otherwise it boots cold from disk. The imported sandbox has a new ID and lineage, no secret
   selection and no integration attachments.
+- Limits: an import must finish within 10 min (bucket download included) or the sandbox is
+  `FAILED`; a file export needs 1 GiB left free, an import its unpacked size + 1 GiB; a workspace
+  restart fails running exports.
 - Archives are **not encrypted** — keep files and buckets private. `--file` uploads hit the 50 MiB
   edge cap on the public API URL; use a bucket for large archives.
-- `zbox lineage set --export` and `PUT /lineage/{id}` control nothing; export is started directly.
 
 ## Running commands
 
@@ -292,10 +293,11 @@ Variables starting with `ZBOX_` are never delivered.
   **exported** (nor its snapshots). Disk snapshots work; their restores are secret-bearing too.
 - **The API never returns env values.** `launchContract.envNames` (from `zbox new -e`, inherited by
   forks) and the session's `command.envNames` (from `exec -e` / `process -e`) list names only. Clients
-  that read values from `launchContract.env` / `command.env` must stop.
+  that read values from `launchContract.env` / `command.env` must stop. `-e` values are still not
+  secrets: forks inherit them and they don't block fork/export — pass credentials with `--secret`.
 - **Stale secrets**: any change to a selected var marks the sandbox stale. A parked stale sandbox
   refuses implicit wake (`secretsStale` / `503 SECRETS_STALE`); use `zbox wake --redeliver-secrets`
-  (cold boot). A running one needs `park --no-memory` first.
+  (cold boot); on a running one it does the same in one operation, and so does a resize.
 - **Integration** (preferred for API tokens): the credentials proxy injects the credential; the
   sandbox calls `http://<label>.int.workspace/...` and never sees it.
   `zbox integration create stripe --target-url https://api.stripe.com --credential-env STRIPE_KEY --inject bearer`,
@@ -336,7 +338,8 @@ Variables starting with `ZBOX_` are never delivered.
   policy). Fields: `allowedNetworkModes`, `maxCpus`, `maxMemoryBytes`, `maxDiskBytes`,
   `defaultDiskBytes` (10 GiB), TTL caps, `coreReserveBytes`, `cpuOvercommit`, and the secrets
   ceiling `secrets.allowedModes` (`NONE`/`ALLOWLIST`/`ALL_ENVS`) and `secrets.allowedNames` (vars a
-  sandbox may select or alias; a list refuses `ALL_ENVS`). Over a ceiling → `422 policyViolation`.
+  sandbox may select or alias; a list refuses `ALL_ENVS`; **an empty list means no limit** — deny
+  all secrets with `allowedModes: ["NONE"]`). Over a ceiling → `422 policyViolation`.
 - **Set `secrets.allowedNames` before handing out a `sandbox` token.** Only the key or a
   `workspace`/`admin` token changes it.
 - A sandbox policy is versioned: `PUT /sandbox/{id}/policy` takes the **whole** policy plus the
@@ -358,4 +361,4 @@ without a TTY. Exit codes: `0` ok · `1` failed · `2` usage/invalid · `3` not 
 
 The API: every route under `/api/rest/`, bearer key or token (never in the query string), OpenAPI at
 `<API URL>/api/rest/swagger/openapi.yml`. Capacity-consuming POSTs **require an `Idempotency-Key`**
-header (export and import included); operations long-poll with `?waitSeconds=30`.
+header (export and import included, not the `--file` upload route); operations long-poll with `?waitSeconds=30`.
