@@ -139,6 +139,7 @@ UPSTREAM_SOURCES=(
   "apps/docs/content/zbox/monitoring.mdx|references/zbox.md"
   "apps/docs/content/zbox/isolation.mdx|references/zbox.md"
   "apps/docs/content/zbox/lineages.mdx|references/zbox.md"
+  "apps/docs/content/zbox/export.mdx|references/zbox.md"
   "apps/docs/content/zbox/docker.mdx|references/zbox.md"
   "apps/docs/content/zbox/faq.mdx|references/zbox.md"
   "apps/docs/content/zbox/pricing.mdx|references/zbox.md"
