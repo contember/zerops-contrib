@@ -1,6 +1,6 @@
 {
   "name": "zerops",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Build, configure, deploy and operate applications on Zerops — the zerops.yaml and import YAML formats, the service catalog, networking and CDN, the deploy lifecycle, plus zops, a CLI covering the whole public API.",
   "author": {
     "name": "Contember",
