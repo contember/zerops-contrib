@@ -37,6 +37,14 @@ Tokens come from the Zerops GUI under **Settings → Access Token Management**. 
 token is enough for everything except `project list` and `project create`. `zops auth login` will
 persist one to `~/.config/zops/config.json` (mode 0600) instead.
 
+A token belongs to one organization. For several, keep one named profile each, with a command
+that reads the token from the keychain, and switch with `--profile`, `ZEROPS_PROFILE` or
+`zops profile use` (details in [`cli/README.md`](cli/README.md#profiles-one-per-organization)):
+
+```sh
+zops auth login --profile acme --token-command 'security find-generic-password -s zerops-acme -w'
+```
+
 ## Using it
 
 The skill loads on its own whenever a conversation touches Zerops — a `zerops.yaml` in the repo, a
