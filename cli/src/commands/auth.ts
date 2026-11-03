@@ -33,8 +33,10 @@ export const authCommands: CommandSpec[] = [
     path: ["auth", "login"],
     summary: "Store an access token, or a command that prints one, for future commands.",
     description: `Verifies the token against the API, then writes it to ${userConfigPath} with 0600
-permissions. With --profile the token goes into that named profile instead of the top-level
-setting; the first profile created becomes the selected one when nothing else is configured.
+permissions. When a profile is in effect (--profile, ZEROPS_PROFILE or \`zops profile use\`) the
+token goes into that profile, creating it if needed; otherwise into the top-level setting. The
+first profile created becomes the selected one when nothing else is configured. --project,
+--service and --region typed on this command line are stored alongside as defaults.
 
 --token-command stores a shell command that prints the token instead of the token itself, so
 the secret stays in the keychain or password manager. zops runs it whenever a command needs the
@@ -90,14 +92,14 @@ directory and leaves no credential on disk.`,
       }
 
       const credential = command ? { token: undefined, tokenCommand: command } : { token, tokenCommand: undefined };
+      // Only values typed on this command line are stored; an ambient ZEROPS_PROJECT or a repo's
+      // .zops.json belongs to the shell or the repo, not to the saved setup.
+      const typed = (name: "region" | "project" | "service") =>
+        parsed.fromEnv?.has(name) ? undefined : (parsed.flags[name] as string | undefined);
       let selected = false;
       const path = profile
         ? updateUserConfig((config) => {
-            // Only values typed on this command line become profile defaults; an ambient
-            // ZEROPS_PROJECT or a repo's .zops.json belongs to the shell, not to the profile.
-            const typed = (name: "region" | "project" | "service") =>
-              parsed.fromEnv?.has(name) ? undefined : (parsed.flags[name] as string | undefined);
-            const existing = config.profiles?.[profile] ?? {};
+            const existing = Object.hasOwn(config.profiles ?? {}, profile) ? config.profiles![profile]! : {};
             config.profiles = {
               ...config.profiles,
               [profile]: {
@@ -113,7 +115,7 @@ directory and leaves no credential on disk.`,
               selected = true;
             }
           })
-        : saveUserConfig({ ...credential, region: ctx.config.region });
+        : saveUserConfig({ ...credential, ...(typed("region") ? { region: typed("region") } : {}) });
       ctx.out.step(
         `${command ? "token command" : "token"} saved to ${path}${profile ? ` (profile ${profile})` : ""}` +
           (selected ? `; profile ${profile} is now selected` : ""),
@@ -132,30 +134,25 @@ directory and leaves no credential on disk.`,
   },
   {
     path: ["auth", "logout"],
-    summary: "Remove the stored access token, or the selected profile.",
-    description: `Without a profile, removes the top-level token (or token command) from ${userConfigPath}.
-With a profile selected (--profile, ZEROPS_PROFILE or \`zops profile use\`), removes that whole
-profile, and clears the selection if it pointed to it.`,
+    summary: "Remove the stored access token (or token command) of the profile in effect.",
+    description: `Removes the token or tokenCommand from ${userConfigPath}: from the profile in effect
+(--profile, ZEROPS_PROFILE or \`zops profile use\`), else the top-level setting. A profile keeps its
+project, service and region defaults; \`zops profile remove\` deletes it entirely.`,
     examples: ["zops auth logout", "zops auth logout --profile acme"],
     operations: [],
     async run(ctx) {
       const profile = ctx.config.profile;
-      if (!profile) {
-        if (ctx.dryRun) return { removed: false, path: userConfigPath };
-        saveUserConfig({ token: undefined, tokenCommand: undefined });
-        ctx.out.step(`token removed from ${userConfigPath}`);
-        return { removed: true, path: userConfigPath };
+      if (profile && !Object.hasOwn(readUserConfig().profiles ?? {}, profile)) {
+        throw notFound(`no profile named '${profile}'`, "Run `zops profile list`.");
       }
-      const exists = readUserConfig().profiles?.[profile] !== undefined;
-      if (!exists) throw notFound(`no profile named '${profile}'`, "Run `zops profile list`.");
-      if (ctx.dryRun) return { removed: false, profile, path: userConfigPath };
+      if (ctx.dryRun) return { removed: false, profile: profile ?? null, path: userConfigPath };
       updateUserConfig((config) => {
-        const { [profile]: _removed, ...rest } = config.profiles ?? {};
-        config.profiles = Object.keys(rest).length ? rest : undefined;
-        if (config.profile === profile) config.profile = undefined;
+        const target = profile ? config.profiles![profile]! : config;
+        target.token = undefined;
+        target.tokenCommand = undefined;
       });
-      ctx.out.step(`profile ${profile} removed from ${userConfigPath}`);
-      return { removed: true, profile, path: userConfigPath };
+      ctx.out.step(`token removed from ${userConfigPath}${profile ? ` (profile ${profile})` : ""}`);
+      return { removed: true, profile: profile ?? null, path: userConfigPath };
     },
   },
   {

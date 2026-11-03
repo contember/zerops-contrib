@@ -47,8 +47,9 @@ token in the config file.`,
       if (clear && name) throw usage("pass either <name> or --none, not both");
       if (!clear && !name) throw usage("profile use requires <name> or --none", "Run `zops profile list`.");
       if (name) {
-        const names = Object.keys(readUserConfig().profiles ?? {});
-        if (!names.includes(name)) {
+        const profiles = readUserConfig().profiles ?? {};
+        const names = Object.keys(profiles);
+        if (!Object.hasOwn(profiles, name)) {
           throw notFound(
             `no profile named '${name}'`,
             names.length ? `Available profiles: ${names.join(", ")}.` : "No profiles are configured yet.",
@@ -60,7 +61,34 @@ token in the config file.`,
         config.profile = name;
       });
       ctx.out.step(name ? `profile ${name} selected` : "profile selection cleared");
+      const env = process.env.ZEROPS_PROFILE;
+      if (env && env !== name) ctx.out.warn(`ZEROPS_PROFILE=${env} is set and takes precedence in this shell`);
       return { profile: name ?? null, saved: true, path };
+    },
+  },
+  {
+    path: ["profile", "remove"],
+    summary: "Delete a profile from the user config, credentials and defaults alike.",
+    description: `Removes the profile from ${userConfigPath} and clears the selection if it pointed to it.
+A tokenCommand's secret stays where it is (keychain, password manager); only the reference goes.`,
+    args: [{ name: "name", description: "Profile to delete.", required: true }],
+    examples: ["zops profile remove acme --yes"],
+    destructive: true,
+    operations: [],
+    async run(ctx, parsed) {
+      const name = parsed.args[0]!;
+      if (!Object.hasOwn(readUserConfig().profiles ?? {}, name)) {
+        throw notFound(`no profile named '${name}'`, "Run `zops profile list`.");
+      }
+      if (ctx.dryRun) return { removed: false, profile: name, path: userConfigPath };
+      await ctx.confirm(`delete profile ${name}`);
+      const path = updateUserConfig((config) => {
+        const { [name]: _removed, ...rest } = config.profiles ?? {};
+        config.profiles = Object.keys(rest).length ? rest : undefined;
+        if (config.profile === name) config.profile = undefined;
+      });
+      ctx.out.step(`profile ${name} removed`);
+      return { removed: true, profile: name, path };
     },
   },
 ];

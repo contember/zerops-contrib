@@ -66,6 +66,11 @@ const USER_CONFIG = join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config
 export function apiUrlForRegion(region: string): string {
   const override = process.env.ZEROPS_API_URL;
   if (override) return override.replace(/\/+$/, "");
+  // The region is spliced into the host the bearer token goes to, and a cloned repo's .zops.*
+  // can set it. Anything but a plain label could point the token at another host.
+  if (!/^[a-z0-9-]+$/.test(region)) {
+    throw usage(`invalid region ${JSON.stringify(region)}`, "Run `zops region list`; for another API host set ZEROPS_API_URL.");
+  }
   return `https://api.app-${region}.zerops.io`;
 }
 
@@ -77,6 +82,19 @@ function readJsonish(path: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * The user config file, or null when there is none. A file that exists but does not parse is an
+ * error rather than an empty config: read-modify-write would otherwise wipe every profile in it.
+ */
+function readUserFile(path: string): (UserConfigFile & Record<string, unknown>) | null {
+  if (!existsSync(path)) return null;
+  const data = readJsonish(path);
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    throw usage(`cannot parse ${path}`, "Fix the JSON by hand; zops will not overwrite a file it cannot read.");
+  }
+  return data as UserConfigFile & Record<string, unknown>;
 }
 
 /** Nearest config file walking up from `start` to the filesystem root. */
@@ -125,7 +143,7 @@ function readStored(data: Record<string, unknown>): StoredConfig {
 
 export function loadConfig(overrides: ConfigOverrides = {}): ResolvedConfig {
   const userPath = overrides.userConfig ?? USER_CONFIG;
-  const user = readJsonish(userPath) as (UserConfigFile & Record<string, unknown>) | null;
+  const user = readUserFile(userPath);
   const layers: Layer[] = [];
   const warnings: string[] = [];
 
@@ -139,14 +157,14 @@ export function loadConfig(overrides: ConfigOverrides = {}): ResolvedConfig {
   else if (envProfile) [profile, profileSource] = [envProfile, "environment"];
   else if (user && str(user.profile)) [profile, profileSource] = [str(user.profile), userPath];
 
+  let profileLayer: Layer | undefined;
   let profileError: ZopsError | undefined;
   if (profile) {
     const profiles = user?.profiles && typeof user.profiles === "object" ? user.profiles : {};
-    const entry = profiles[profile] as Record<string, unknown> | undefined;
+    // hasOwn, so `--profile constructor` is an unknown profile rather than Object.prototype.
+    const entry = Object.hasOwn(profiles, profile) ? (profiles[profile] as Record<string, unknown>) : undefined;
     if (entry && typeof entry === "object") {
-      // The profile replaces the top-level setup instead of layering over it: inheriting the
-      // default token or project would silently act on another organization.
-      layers.push({ source: `${userPath} (profile ${profile})`, values: readStored(entry), tokenCommand: str(entry.tokenCommand) });
+      profileLayer = { source: `${userPath} (profile ${profile})`, values: readStored(entry), tokenCommand: str(entry.tokenCommand) };
     } else {
       const names = Object.keys(profiles);
       profileError = usage(
@@ -156,9 +174,14 @@ export function loadConfig(overrides: ConfigOverrides = {}): ResolvedConfig {
           : `No profiles are configured. Create one with \`zops auth login --profile ${profile} --token-command '<cmd>'\`.`,
       );
     }
-  } else if (user) {
-    layers.push({ source: userPath, values: readStored(user), tokenCommand: str(user.tokenCommand) });
   }
+
+  // A selected profile replaces the top-level setup instead of layering over it: inheriting the
+  // default token or project would silently act on another organization. A profile picked by
+  // ZEROPS_PROFILE or `zops profile use` sits where the top-level setup would; one typed as
+  // --profile counts as a flag (below), so an exported ZEROPS_TOKEN cannot quietly override it.
+  if (!profile && user) layers.push({ source: userPath, values: readStored(user), tokenCommand: str(user.tokenCommand) });
+  if (profileLayer && profileSource !== "flag") layers.push(profileLayer);
 
   const project = findProjectConfig(overrides.cwd ?? process.cwd());
   if (project) {
@@ -194,6 +217,7 @@ export function loadConfig(overrides: ConfigOverrides = {}): ResolvedConfig {
   for (const key of ["token", "region", "project", "service"] as const) {
     if (!overrides.fromEnv?.has(key) && str(overrides[key])) flagValues[key] = overrides[key];
   }
+  if (profileLayer && profileSource === "flag") layers.push(profileLayer);
   layers.push({ source: "flags", values: flagValues });
 
   const merged: StoredConfig = {};
@@ -211,14 +235,13 @@ export function loadConfig(overrides: ConfigOverrides = {}): ResolvedConfig {
   const tokenLayer = [...layers].reverse().find((l) => l.values.token !== undefined || l.tokenCommand !== undefined);
   const viaCommand = tokenLayer !== undefined && tokenLayer.values.token === undefined;
   const tokenSource = tokenLayer
-    ? (tokenLayer.source === layers[0]?.source && profile
+    ? (tokenLayer === profileLayer
         ? `profile ${profile}`
         : tokenLayer.source === "flags"
           ? "flag"
           : tokenLayer.source) + (viaCommand ? " (tokenCommand)" : "")
     : undefined;
 
-  const profileLayer = profile && !profileError ? layers[0] : undefined;
   if (profileLayer && tokenLayer && tokenLayer !== profileLayer && tokenLayer.source !== "flags") {
     if (profileLayer.values.token !== undefined || profileLayer.tokenCommand !== undefined) {
       const name = tokenLayer.source === "environment" ? "ZEROPS_TOKEN" : `the token in ${tokenLayer.source}`;
@@ -268,6 +291,10 @@ export function runTokenCommand(command: string, profile?: string): string {
   }
   const token = proc.stdout.toString().trim();
   if (!token) throw authError(`${label} printed nothing`, `Run the command yourself to check it: ${command}`);
+  // Otherwise the request fails as an invalid header, which reads like a network error and is retried.
+  if (/\s/.test(token)) {
+    throw authError(`${label} printed more than one word`, "It must print the token and nothing else.");
+  }
   return token;
 }
 
@@ -276,7 +303,7 @@ export function runTokenCommand(command: string, profile?: string): string {
  * delete by assignment.
  */
 export function updateUserConfig(mutate: (config: UserConfigFile) => void, path = USER_CONFIG): string {
-  const config = (readJsonish(path) ?? {}) as UserConfigFile;
+  const config: UserConfigFile = readUserFile(path) ?? {};
   mutate(config);
   const prune = (o: Record<string, unknown>) => {
     for (const key of Object.keys(o)) if (o[key] === undefined) delete o[key];
@@ -291,7 +318,7 @@ export function updateUserConfig(mutate: (config: UserConfigFile) => void, path 
 }
 
 export function readUserConfig(path = USER_CONFIG): UserConfigFile {
-  return (readJsonish(path) ?? {}) as UserConfigFile;
+  return readUserFile(path) ?? {};
 }
 
 export function saveUserConfig(patch: StoredConfig & { tokenCommand?: string }): string {

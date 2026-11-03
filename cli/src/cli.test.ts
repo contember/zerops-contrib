@@ -320,10 +320,47 @@ describe("profiles", () => {
     expect(mode).toBe(0o600);
   });
 
-  test("logout --profile removes the profile and clears a selection pointing to it", async () => {
-    expect((await cli(["auth", "logout", "--profile", "beta"])).exitCode).toBe(0);
+  test("a typed --profile beats an exported ZEROPS_TOKEN", async () => {
+    const { stdout } = await cli(["auth", "status", "--profile", "alpha", "--json"], { ZEROPS_TOKEN: "fake-env" });
+    expect(JSON.parse(stdout)).toMatchObject({ tokenSource: "profile alpha (tokenCommand)", organization: "org of fake-alpha" });
+  });
+
+  test("logout removes only the credential of the profile in effect", async () => {
+    expect((await cli(["auth", "logout"])).exitCode).toBe(0);
+    expect(stored().profile).toBe("beta");
+    expect(stored().profiles.beta).toEqual({});
+    expect(stored().profiles.alpha.tokenCommand).toBe("printf fake-alpha");
+  });
+
+  test("profile remove deletes the profile, needs --yes unattended, and clears the selection", async () => {
+    const refused = await cli(["profile", "remove", "beta"]);
+    expect(refused.exitCode).toBe(2);
+    expect(stored().profiles.beta).toBeDefined();
+    expect((await cli(["profile", "remove", "beta", "--yes"])).exitCode).toBe(0);
     expect(stored().profile).toBeUndefined();
     expect(Object.keys(stored().profiles)).toEqual(["alpha", "gamma"]);
+    expect((await cli(["profile", "remove", "constructor", "--yes"])).exitCode).toBe(4);
+  });
+
+  test("a plain login stores no region it was not given", async () => {
+    const { exitCode } = await cli(["auth", "login", "fake-top"], { ZEROPS_REGION: "prg2" });
+    expect(exitCode).toBe(0);
+    expect(stored().token).toBe("fake-top");
+    expect(stored().region).toBeUndefined();
+  });
+
+  test("a config file that does not parse is left alone", async () => {
+    const broken = mkdtempSync(join(tmpdir(), "zops-broken-"));
+    const path = join(broken, "zops", "config.json");
+    await Bun.write(path, '{ "token": "fake-top", }');
+    const { stderr, exitCode } = await runCli(["auth", "login", "--profile", "x", "fake-x"], {
+      XDG_CONFIG_HOME: broken,
+      ZEROPS_API_URL: `http://localhost:${server.port}`,
+    });
+    expect(exitCode).toBe(2);
+    expect(stderr).toContain("cannot parse");
+    expect(readFileSync(path, "utf8")).toBe('{ "token": "fake-top", }');
+    rmSync(broken, { recursive: true, force: true });
   });
 
   test("scale set takes the autoscaling profile as --autoscaling-profile", async () => {

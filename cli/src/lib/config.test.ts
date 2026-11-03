@@ -122,6 +122,18 @@ describe("profile selection", () => {
     expect((error as ZopsError).hint).toContain("alpha, beta");
   });
 
+  test("names of Object.prototype members are unknown profiles", () => {
+    writeUser(PROFILES);
+    for (const name of ["constructor", "__proto__", "toString"]) {
+      expect(() => load({ profile: name }).token).toThrow(/no profile named/);
+    }
+  });
+
+  test("a config file that does not parse is an error, not an empty config", () => {
+    writeFileSync(userConfig, '{ "token": "fake-top", }');
+    expect(() => load()).toThrow(/cannot parse/);
+  });
+
   test("a repo config file cannot select a profile", () => {
     writeUser(PROFILES);
     writeFileSync(join(dir, ".zops.json"), JSON.stringify({ profile: "alpha", project: "pinned" }));
@@ -165,6 +177,11 @@ describe("tokenCommand", () => {
     expect(() => load({ profile: "beta" }).token).toThrow(/printed nothing/);
   });
 
+  test("a command that prints more than the token is rejected", () => {
+    writeUser({ profiles: { beta: { tokenCommand: "printf 'fake-beta\\nextra'" } } });
+    expect(() => load({ profile: "beta" }).token).toThrow(/more than one word/);
+  });
+
   test("a literal token beats a tokenCommand in the same profile", () => {
     writeUser({ profiles: { both: { token: "fake-literal", tokenCommand: "exit 1" } } });
     expect(load({ profile: "both" }).token).toBe("fake-literal");
@@ -179,13 +196,29 @@ describe("tokenCommand", () => {
 });
 
 describe("precedence", () => {
-  test("ZEROPS_TOKEN beats the profile, with a warning", () => {
-    writeUser(PROFILES);
+  test("ZEROPS_TOKEN beats a profile selected with `profile use`, with a warning", () => {
+    writeUser({ profile: "alpha", ...PROFILES });
     process.env.ZEROPS_TOKEN = "fake-env";
-    const config = load({ profile: "alpha" });
+    const config = load();
     expect(config.token).toBe("fake-env");
     expect(config.tokenSource).toBe("environment");
     expect(config.warnings).toEqual(["ZEROPS_TOKEN overrides the token of profile 'alpha'"]);
+  });
+
+  test("a profile typed as --profile counts as a flag and beats ZEROPS_TOKEN and repo files", () => {
+    writeUser(PROFILES);
+    process.env.ZEROPS_TOKEN = "fake-env";
+    writeFileSync(join(dir, ".zops.json"), JSON.stringify({ project: "pinned", token: "fake-repo" }));
+    const config = load({ profile: "alpha" });
+    expect(config.token).toBe("fake-alpha");
+    expect(config.project).toBe("shop");
+    expect(config.warnings).toEqual([]);
+    // Chosen through the environment, the profile sits below both, as the top-level setup would.
+    process.env.ZEROPS_PROFILE = "alpha";
+    const ambient = load();
+    expect(ambient.token).toBe("fake-env");
+    expect(ambient.project).toBe("pinned");
+    expect(ambient.warnings).toEqual(["ZEROPS_TOKEN overrides the token of profile 'alpha'"]);
   });
 
   test("--token beats the profile without a warning, since it was asked for", () => {
@@ -196,11 +229,20 @@ describe("precedence", () => {
     expect(config.warnings).toEqual([]);
   });
 
-  test("a repo's project beats the profile's project; flags beat both", () => {
-    writeUser(PROFILES);
+  test("a repo's project beats a selected profile's project; flags beat both", () => {
+    writeUser({ profile: "alpha", ...PROFILES });
     writeFileSync(join(dir, ".zops.json"), JSON.stringify({ project: "pinned" }));
-    expect(load({ profile: "alpha" }).project).toBe("pinned");
+    expect(load().project).toBe("pinned");
+    expect(load({ project: "typed" }).project).toBe("typed");
     expect(load({ profile: "alpha", project: "typed" }).project).toBe("typed");
+  });
+
+  test("a region that is not a plain label is rejected before any URL is built", () => {
+    writeFileSync(join(dir, ".zops.json"), JSON.stringify({ region: "x.attacker.example#" }));
+    expect(() => load()).toThrow(/invalid region/);
+    expect(() => load({ region: "prg1/../" })).toThrow(/invalid region/);
+    process.env.ZEROPS_API_URL = "http://localhost:1/";
+    expect(load().apiUrl).toBe("http://localhost:1");
   });
 
   test("the profile's region is not overridden by a built-in default", () => {
