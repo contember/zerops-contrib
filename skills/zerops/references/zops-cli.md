@@ -57,9 +57,10 @@ zops auth login --profile acme --token-command 'security find-generic-password -
 
 A profile holds a `token` or a `tokenCommand` (a shell command printing the token, run only when
 needed), plus optional `project`/`service`/`region` defaults. Precedence: flag → environment →
-repo `.zops.*` → profile (or the top-level config when none is selected). An exported
-`ZEROPS_TOKEN` beats the profile, with a warning on stderr. `scale set` takes the autoscaling
-profile as `--autoscaling-profile`, since `--profile` is the global one.
+repo `.zops.*` → profile (or the top-level config when none is selected). A typed `--profile`
+counts as a flag, so it beats an exported `ZEROPS_TOKEN`; a profile from `ZEROPS_PROFILE` or
+`profile use` does not, so with `--json` check `tokenSource` in `zops auth status`. `scale set`
+takes the autoscaling profile as `--autoscaling-profile`, since `--profile` is the global one.
 
 ## Output contract
 

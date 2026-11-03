@@ -59,10 +59,12 @@ zops project list --profile globex   # one command against another organization
 ZEROPS_PROFILE=globex zops service list
 ```
 
-The first profile created becomes the selected one when the config has no top-level token yet.
-`--project`, `--service` and `--region` typed on the `auth login --profile` command line become
-that profile's defaults. `zops auth status` shows the profile in effect and where the token came
-from. `zops auth logout --profile <name>` removes a profile.
+`auth login` writes into the profile in effect (`--profile`, `ZEROPS_PROFILE` or `profile use`),
+creating it if needed, and into the top-level setting when there is none. The first profile
+created becomes the selected one when the config has no top-level token yet. `--project`,
+`--service` and `--region` typed on the `auth login` command line are stored as defaults.
+`zops auth status` shows the profile in effect and where the token came from.
+`zops auth logout` removes only the credential; `zops profile remove <name>` deletes a profile.
 
 The resulting `~/.config/zops/config.json`:
 
@@ -89,15 +91,20 @@ order is flag → environment → repo config file → profile or user config fi
 | Flags | `--token`, `--project`, `--service`, `--region` |
 | Environment | `ZEROPS_TOKEN`, `ZEROPS_PROJECT`, `ZEROPS_SERVICE`, `ZEROPS_REGION` |
 | `./.zops.json` / `.zops.yaml` (walking up) | `token`, `project`, `service`, `region` |
-| `./.zcli.yaml` | `projectId`, `serviceId` — read for compatibility |
+| `./.zcli.yaml` | `projectId`, `serviceId` (read for compatibility), also `token`, `region` |
 | `~/.config/zops/config.json`, selected profile | `token` or `tokenCommand`, `project`, `service`, `region` |
 | `~/.config/zops/config.json`, top level | the same keys; used only when no profile is selected |
 
 The profile is selected by `--profile`, else `ZEROPS_PROFILE`, else `zops profile use`. It
 replaces the top-level settings rather than layering over them, so a profile never inherits
-another organization's token or project. A repo config file can pin a project but cannot select
-a profile or run a `tokenCommand`. When `ZEROPS_TOKEN` shadows a selected profile's token, zops
-warns on stderr.
+another organization's token or project. A profile typed as `--profile` counts as a flag: its
+values beat the environment and repo files, and only other typed flags beat it. A profile chosen
+by `ZEROPS_PROFILE` or `profile use` sits in the table's last rows, so an exported `ZEROPS_TOKEN`
+wins; zops then warns on stderr (not under `--json`, where `auth status` reports `tokenSource`).
+
+A repo config file can pin a project but cannot select a profile or run a `tokenCommand`. A
+`region` must be a plain label like `prg1`; anything else is rejected, since it becomes part of
+the host the token is sent to. For another API host, set `ZEROPS_API_URL`.
 
 ## Output contract
 
