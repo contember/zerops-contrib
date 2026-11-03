@@ -1,5 +1,6 @@
 import type { CommandSpec } from "../lib/spec.ts";
 import { authCommands } from "./auth.ts";
+import { profileCommands } from "./profile.ts";
 import { projectCommands, projectEnvCommands } from "./project.ts";
 import { serviceCommands } from "./service.ts";
 import { envCommands } from "./env.ts";
@@ -21,6 +22,7 @@ import { applyCommands } from "./apply.ts";
 
 export const COMMANDS: CommandSpec[] = [
   ...authCommands,
+  ...profileCommands,
   ...projectCommands,
   ...projectEnvCommands,
   ...applyCommands,

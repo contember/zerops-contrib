@@ -44,6 +44,24 @@ export ZEROPS_PROJECT=myapp                # names work everywhere ids do
 
 `zops` also reads `projectId` / `serviceId` from an existing `.zcli.yaml`.
 
+**Several organizations.** A token belongs to exactly one organization, so the user may have
+named profiles, one per organization. Check before acting, and pass the profile explicitly
+rather than relying on the selected one:
+
+```sh
+zops profile list                          # names and defaults; never prints a token
+zops auth status --profile acme            # which organization and where the token came from
+zops project list --profile acme           # or ZEROPS_PROFILE=acme for a whole session
+zops auth login --profile acme --token-command 'security find-generic-password -s zerops-acme -w'
+```
+
+A profile holds a `token` or a `tokenCommand` (a shell command printing the token, run only when
+needed), plus optional `project`/`service`/`region` defaults. Precedence: flag → environment →
+repo `.zops.*` → profile (or the top-level config when none is selected). A typed `--profile`
+counts as a flag, so it beats an exported `ZEROPS_TOKEN`; a profile from `ZEROPS_PROFILE` or
+`profile use` does not, so with `--json` check `tokenSource` in `zops auth status`. `scale set`
+takes the autoscaling profile as `--autoscaling-profile`, since `--profile` is the global one.
+
 ## Output contract
 
 - **stdout is data; stderr is progress, warnings and errors** — including the JSON error

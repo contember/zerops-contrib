@@ -34,6 +34,8 @@ export interface ParsedArgs {
   flags: Record<string, string | boolean | number | string[] | undefined>;
   /** Everything after a bare `--`, passed through untouched. */
   rest: string[];
+  /** Flags whose value came from their environment variable rather than the command line. */
+  fromEnv?: Set<string>;
 }
 
 export interface CommandSpec {
@@ -68,7 +70,14 @@ export const GLOBAL_FLAGS: FlagSpec[] = [
     type: "string",
     env: "ZEROPS_TOKEN",
     placeholder: "<token>",
-    description: "Zerops personal access token. Defaults to $ZEROPS_TOKEN, then the config file.",
+    description: "Zerops personal access token. Defaults to $ZEROPS_TOKEN, then the profile or config file.",
+  },
+  {
+    name: "profile",
+    type: "string",
+    env: "ZEROPS_PROFILE",
+    placeholder: "<name>",
+    description: "Named profile from the user config, one per organization. Defaults to $ZEROPS_PROFILE, then `zops profile use`.",
   },
   {
     name: "project",
@@ -90,9 +99,9 @@ export const GLOBAL_FLAGS: FlagSpec[] = [
     name: "region",
     type: "string",
     env: "ZEROPS_REGION",
-    default: "prg1",
     placeholder: "<region>",
-    description: "API region. Run `zops region list` for the available set.",
+    // No declared default: one would beat the profile and config file. loadConfig falls back to prg1.
+    description: "API region. Defaults to $ZEROPS_REGION, then the profile or config file, then prg1. Run `zops region list` for the available set.",
   },
   {
     name: "wait",
@@ -159,6 +168,7 @@ export function parseArgs(argv: string[], specs: FlagSpec[]): ParsedArgs {
   const args: string[] = [];
   const rest: string[] = [];
   const flags: ParsedArgs["flags"] = {};
+  const fromEnv = new Set<string>();
 
   const setFlag = (spec: FlagSpec, value: string | boolean | number) => {
     if (spec.type === "string[]") {
@@ -235,9 +245,10 @@ export function parseArgs(argv: string[], specs: FlagSpec[]): ParsedArgs {
   for (const spec of specs) {
     if (flags[spec.name] !== undefined) continue;
     if (spec.env) {
-      const fromEnv = process.env[spec.env];
-      if (fromEnv !== undefined && fromEnv !== "") {
-        flags[spec.name] = spec.type === "string[]" ? [fromEnv] : coerce(spec, fromEnv);
+      const envValue = process.env[spec.env];
+      if (envValue !== undefined && envValue !== "") {
+        flags[spec.name] = spec.type === "string[]" ? [envValue] : coerce(spec, envValue);
+        fromEnv.add(spec.name);
         continue;
       }
     }
@@ -250,7 +261,7 @@ export function parseArgs(argv: string[], specs: FlagSpec[]): ParsedArgs {
     }
   }
 
-  return { args, flags, rest };
+  return { args, flags, rest, fromEnv };
 }
 
 /** `90s`, `10m`, `1h`, or a bare number of seconds, in milliseconds. */

@@ -1,6 +1,12 @@
 import type { CommandSpec } from "../lib/spec.ts";
-import { saveUserConfig, userConfigPath } from "../lib/config.ts";
-import { authError } from "../lib/errors.ts";
+import {
+  readUserConfig,
+  runTokenCommand,
+  saveUserConfig,
+  updateUserConfig,
+  userConfigPath,
+} from "../lib/config.ts";
+import { authError, notFound, usage } from "../lib/errors.ts";
 
 interface UserInfo {
   id: string;
@@ -25,22 +31,55 @@ async function whoami(ctx: import("../lib/context.ts").Context): Promise<UserInf
 export const authCommands: CommandSpec[] = [
   {
     path: ["auth", "login"],
-    summary: "Store a personal access token for future commands.",
-    description: `Writes the token to ${userConfigPath} with 0600 permissions and verifies it against the API.
+    summary: "Store an access token, or a command that prints one, for future commands.",
+    description: `Verifies the token against the API, then writes it to ${userConfigPath} with 0600
+permissions. When a profile is in effect (--profile, ZEROPS_PROFILE or \`zops profile use\`) the
+token goes into that profile, creating it if needed; otherwise into the top-level setting. The
+first profile created becomes the selected one when nothing else is configured. --project,
+--service and --region typed on this command line are stored alongside as defaults.
+
+--token-command stores a shell command that prints the token instead of the token itself, so
+the secret stays in the keychain or password manager. zops runs it whenever a command needs the
+token. A Zerops token belongs to exactly one organization: use one profile per organization.
 
 Tokens are created in the Zerops GUI under Settings → Access Token Management. In CI, prefer
 setting ZEROPS_TOKEN in the environment over calling this command — it needs no writable home
 directory and leaves no credential on disk.`,
-    args: [{ name: "token", description: "Personal access token. Use '-' to read it from stdin.", required: true }],
+    args: [
+      {
+        name: "token",
+        description: "Personal access token. Use '-' to read it from stdin. Omit when passing --token-command.",
+      },
+    ],
+    flags: [
+      {
+        name: "token-command",
+        type: "string",
+        placeholder: "<cmd>",
+        description: "Store this shell command, which must print the token on stdout, instead of the token.",
+      },
+    ],
     examples: [
       "zops auth login zes1abc...",
       "cat token.txt | zops auth login -",
+      "zops auth login --profile acme --token-command 'security find-generic-password -s zerops-acme -w'",
+      "zops auth login --profile acme --project shop --token-command 'op read op://vault/zerops-acme/token'",
       "ZEROPS_TOKEN=zes1abc... zops service list   # no stored credential",
     ],
     operations: ["GetUserInfo"],
     async run(ctx, parsed) {
-      const raw = parsed.args[0]!;
-      const token = raw === "-" ? (await Bun.stdin.text()).trim() : raw;
+      const command = ctx.flag<string>("token-command");
+      const raw = parsed.args[0];
+      if (command && raw) throw usage("pass either <token> or --token-command, not both");
+      if (!command && !raw) {
+        throw usage("auth login requires <token> or --token-command", "Run `zops auth login --help`.");
+      }
+      const profile = ctx.config.profile;
+      const token = command
+        ? runTokenCommand(command, profile)
+        : raw === "-"
+          ? (await Bun.stdin.text()).trim()
+          : raw!;
       if (!token) throw authError("empty token");
 
       // Verify before persisting, so a typo fails here instead of on the next command.
@@ -49,38 +88,90 @@ directory and leaves no credential on disk.`,
 
       if (ctx.dryRun) {
         ctx.out.info(`token is valid for ${info.email}; not saved (--dry-run)`);
-        return { valid: true, saved: false, userId: info.id };
+        return { valid: true, saved: false, profile: profile ?? null, userId: info.id };
       }
 
-      const path = saveUserConfig({ token, region: ctx.config.region });
-      ctx.out.step(`token saved to ${path}`);
-      return { valid: true, saved: true, path, userId: info.id, email: info.email };
+      const credential = command ? { token: undefined, tokenCommand: command } : { token, tokenCommand: undefined };
+      // Only values typed on this command line are stored; an ambient ZEROPS_PROJECT or a repo's
+      // .zops.json belongs to the shell or the repo, not to the saved setup.
+      const typed = (name: "region" | "project" | "service") =>
+        parsed.fromEnv?.has(name) ? undefined : (parsed.flags[name] as string | undefined);
+      let selected = false;
+      const path = profile
+        ? updateUserConfig((config) => {
+            const existing = Object.hasOwn(config.profiles ?? {}, profile) ? config.profiles![profile]! : {};
+            config.profiles = {
+              ...config.profiles,
+              [profile]: {
+                ...existing,
+                ...credential,
+                region: typed("region") ?? existing.region,
+                project: typed("project") ?? existing.project,
+                service: typed("service") ?? existing.service,
+              },
+            };
+            if (!config.profile && !config.token && !config.tokenCommand) {
+              config.profile = profile;
+              selected = true;
+            }
+          })
+        : saveUserConfig({ ...credential, ...(typed("region") ? { region: typed("region") } : {}) });
+      ctx.out.step(
+        `${command ? "token command" : "token"} saved to ${path}${profile ? ` (profile ${profile})` : ""}` +
+          (selected ? `; profile ${profile} is now selected` : ""),
+      );
+      return {
+        valid: true,
+        saved: true,
+        path,
+        profile: profile ?? null,
+        selected,
+        credential: command ? "tokenCommand" : "token",
+        userId: info.id,
+        email: info.email,
+      };
     },
   },
   {
     path: ["auth", "logout"],
-    summary: "Remove the stored access token.",
+    summary: "Remove the stored access token (or token command) of the profile in effect.",
+    description: `Removes the token or tokenCommand from ${userConfigPath}: from the profile in effect
+(--profile, ZEROPS_PROFILE or \`zops profile use\`), else the top-level setting. A profile keeps its
+project, service and region defaults; \`zops profile remove\` deletes it entirely.`,
+    examples: ["zops auth logout", "zops auth logout --profile acme"],
     operations: [],
     async run(ctx) {
-      if (ctx.dryRun) return { removed: false, path: userConfigPath };
-      saveUserConfig({ token: undefined });
-      ctx.out.step(`token removed from ${userConfigPath}`);
-      return { removed: true, path: userConfigPath };
+      const profile = ctx.config.profile;
+      if (profile && !Object.hasOwn(readUserConfig().profiles ?? {}, profile)) {
+        throw notFound(`no profile named '${profile}'`, "Run `zops profile list`.");
+      }
+      if (ctx.dryRun) return { removed: false, profile: profile ?? null, path: userConfigPath };
+      updateUserConfig((config) => {
+        const target = profile ? config.profiles![profile]! : config;
+        target.token = undefined;
+        target.tokenCommand = undefined;
+      });
+      ctx.out.step(`token removed from ${userConfigPath}${profile ? ` (profile ${profile})` : ""}`);
+      return { removed: true, profile: profile ?? null, path: userConfigPath };
     },
   },
   {
     path: ["auth", "status"],
     summary: "Show who the current token belongs to and where the configuration came from.",
-    description: `Reports the resolved identity plus every configuration source that contributed, which is
-the fastest way to diagnose "wrong project" and "unexpected permissions" problems.
+    description: `Reports the resolved identity, the profile in effect, where the token came from, and every
+configuration source that contributed, which is the fastest way to diagnose "wrong project",
+"wrong organization" and "unexpected permissions" problems. The token itself is never printed.
 
 Exits 3 when no token is configured or the token is rejected.`,
-    examples: ["zops auth status", "zops auth status --json"],
+    examples: ["zops auth status", "zops auth status --profile acme", "zops auth status --json"],
     operations: ["GetUserInfo"],
     async run(ctx) {
       const info = await whoami(ctx);
       const membership = info.clientUserList?.find((c) => c.status === "ACTIVE") ?? info.clientUserList?.[0];
       const result = {
+        profile: ctx.config.profile ?? null,
+        profileSource: ctx.config.profileSource ?? null,
+        tokenSource: ctx.config.tokenSource ?? null,
         userId: info.id,
         email: info.email,
         name: info.fullName,

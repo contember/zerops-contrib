@@ -86,7 +86,8 @@ const RETRY_BASE_MS = 400;
 export class ApiClient {
   constructor(
     private readonly baseUrl: string,
-    private readonly token: string | undefined,
+    /** A function defers resolution (a profile's tokenCommand) until the first request. */
+    private readonly token: string | undefined | (() => string | undefined),
     private readonly out: Output,
   ) {}
 
@@ -137,7 +138,8 @@ export class ApiClient {
     }
 
     const headers: Record<string, string> = { accept: "application/json" };
-    if (!options.anonymous && this.token) headers.authorization = `Bearer ${this.token}`;
+    const token = typeof this.token === "function" ? this.token() : this.token;
+    if (!options.anonymous && token) headers.authorization = `Bearer ${token}`;
     if (options.body !== undefined) headers["content-type"] = "application/json";
 
     this.out.debug(`→ ${options.method} ${url.pathname}${url.search}`);

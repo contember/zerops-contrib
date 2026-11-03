@@ -63,8 +63,11 @@ export class Context {
       region: parsed.flags.region as string | undefined,
       project: parsed.flags.project as string | undefined,
       service: parsed.flags.service as string | undefined,
+      profile: parsed.flags.profile as string | undefined,
+      fromEnv: parsed.fromEnv,
     });
-    this.api = new ApiClient(this.config.apiUrl, this.config.token, this.out);
+    for (const warning of this.config.warnings) this.out.warn(warning);
+    this.api = new ApiClient(this.config.apiUrl, () => this.config.token, this.out);
   }
 
   // --- flag helpers --------------------------------------------------------
@@ -90,13 +93,16 @@ export class Context {
   }
 
   requireToken(): string {
-    if (!this.config.token) {
+    const token = this.config.token;
+    if (!token) {
       throw authError(
-        "no access token configured",
-        "Run `zops auth login <token>`, or set ZEROPS_TOKEN. Create a token in the Zerops GUI under Settings → Access Token Management.",
+        this.config.profile ? `profile '${this.config.profile}' has no access token` : "no access token configured",
+        this.config.profile
+          ? `Run \`zops auth login --profile ${this.config.profile} <token>\` or \`... --token-command '<cmd>'\`, or set ZEROPS_TOKEN.`
+          : "Run `zops auth login <token>`, or set ZEROPS_TOKEN. Create a token in the Zerops GUI under Settings → Access Token Management.",
       );
     }
-    return this.config.token;
+    return token;
   }
 
   /**

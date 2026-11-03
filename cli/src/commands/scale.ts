@@ -82,12 +82,13 @@ services have a fixed container count decided by their :single / :ha type and re
       { name: "cpu-mode", type: "string", enum: ["SHARED", "DEDICATED"], description: "SHARED is burstable and cheaper; DEDICATED reserves cores." },
       { name: "start-cpu", type: "number", placeholder: "<cores>", description: "Cores a fresh container starts with." },
       { name: "swap", type: "boolean", description: "Enable swap. Use --no-swap to disable." },
-      { name: "profile", type: "string", placeholder: "<id>", description: "Autoscaling profile id, e.g. oltp-production." },
+      // Not `--profile`: that is the global flag selecting a zops profile (organization).
+      { name: "autoscaling-profile", type: "string", placeholder: "<id>", description: "Autoscaling profile id, e.g. oltp-production." },
     ],
     examples: [
       "zops scale set api --min-containers 2 --max-containers 5",
       "zops scale set api --max-cpu 8 --max-ram 16 --cpu-mode DEDICATED",
-      "zops scale set db --profile oltp-production",
+      "zops scale set db --autoscaling-profile oltp-production",
       "zops scale set api --min-containers 2 --dry-run --json",
     ],
     operations: ["GetServiceStack", "ConfigureAutoscaling"],
@@ -98,13 +99,13 @@ services have a fixed container count decided by their :single / :ha type and re
       const num = (name: string) => ctx.flag<number>(name);
       const touched = [
         "min-cpu", "max-cpu", "min-ram", "max-ram", "min-disk", "max-disk",
-        "min-containers", "max-containers", "cpu-mode", "start-cpu", "swap", "profile",
+        "min-containers", "max-containers", "cpu-mode", "start-cpu", "swap", "autoscaling-profile",
       ].filter((f) => ctx.flags[f] !== undefined);
 
       if (touched.length === 0) {
         throw usage(
           "nothing to change",
-          "Pass at least one of --min-cpu, --max-cpu, --min-ram, --max-ram, --min-containers, --max-containers, --cpu-mode, --profile. Run `zops scale get` to see current values.",
+          "Pass at least one of --min-cpu, --max-cpu, --min-ram, --max-ram, --min-containers, --max-containers, --cpu-mode, --autoscaling-profile. Run `zops scale get` to see current values.",
         );
       }
 
@@ -130,7 +131,9 @@ services have a fixed container count decided by their :single / :ha type and re
       };
 
       const body = {
-        ...(ctx.flag<string>("profile") ? { autoscalingProfileId: ctx.flag<string>("profile") } : {}),
+        ...(ctx.flag<string>("autoscaling-profile")
+          ? { autoscalingProfileId: ctx.flag<string>("autoscaling-profile") }
+          : {}),
         customAutoscaling: {
           verticalAutoscalingNullable: vertical,
           horizontalAutoscalingNullable: horizontal,
