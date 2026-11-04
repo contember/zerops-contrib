@@ -178,6 +178,7 @@ zops repo connect acme/api api --branch main  # build on every push
 zops repo build api                           # build now, without a push
 zops pipeline trigger api --from-git https://github.com/acme/api@main
 
+zops tunnel db:5432 -- psql -h 127.0.0.1 -p {port} -U db   # private network, no root
 zops token integration create ci --project-role myapp=BASIC_USER
 zops notification list --type ERROR           # what broke after the process finished
 
@@ -185,6 +186,40 @@ zops catalog --search postgres                # valid type/version strings
 zops validate -S api                          # check zerops.yaml before pushing
 zops schema zerops > zerops-schema.json       # JSON Schema for editors and agents
 ```
+
+## Tunnels into the private network, without root
+
+`zcli vpn up` puts the whole machine on a project's network through a kernel WireGuard
+interface, which needs sudo for the interface, routes and resolver. `zops tunnel` reaches the
+same network in userspace instead: [wireproxy](https://github.com/windtf/wireproxy) runs
+WireGuard on its own network stack and forwards only the services you name to `127.0.0.1`.
+Nothing on the machine changes, so an agent can open one by itself, and a running `zcli vpn` is
+not disturbed.
+
+```sh
+# Run one command through the tunnel; zops exits with its status. {port} and $ZOPS_TUNNEL_PORT
+# are the first tunnel's local port.
+PGPASSWORD="$(zops env get password db -q)" \
+  zops tunnel db:5432 -- psql -h 127.0.0.1 -p {port} -U "$(zops env get user db -q)" -c 'select 1'
+
+# Or hold it open: prints the local addresses, closes on Ctrl-C or after --ttl (default 1h).
+zops tunnel db:5432:15432 cache:6379 --ttl 30m --json
+```
+
+- **Needs wireproxy** on `PATH`, or its path in `--wireproxy` / `ZOPS_WIREPROXY` (release
+  binaries on GitHub), and a token with at least `BASIC_USER` in the project. A `READ_ONLY`
+  token cannot register a VPN key.
+- **A fresh key per run.** zops registers a new WireGuard key with the project and deletes it on
+  exit. The private key is held in memory and, briefly, in a 0600 file in a private temp
+  directory that is removed once wireproxy has read it. A run killed before its teardown leaves
+  the public key in `~/.config/zops/tunnels.json`; the next tunnel to that project deletes it and
+  stops the orphaned wireproxy.
+- **Names resolve as `<hostname>.zerops`** through the project's resolver; targets are always
+  given as plain hostnames.
+- **The tunnel is network access, not credentials.** Database users and passwords still come
+  from the service's environment (`zops env`). For an agent, prefer a read-only database user.
+- Listeners bind to `127.0.0.1` only, but any local process can connect to them while the tunnel
+  is up. Close it when done.
 
 ## Escape hatch: `zops api`
 
@@ -251,8 +286,9 @@ command.
 
 ## What is deliberately missing
 
-**VPN.** `zcli vpn up` needs root, WireGuard and platform-specific DNS work, and it is orthogonal
-to the API. Keep using `zcli` for that one thing.
+**A system-wide VPN.** `zcli vpn up` needs root, WireGuard and platform-specific DNS work. To
+reach particular services without any of that, use `zops tunnel` (above); to put the whole
+machine on the network, keep using `zcli`.
 
 **Account and billing.** Interactive login, 2FA and WebAuthn ceremonies, registration, password
 recovery, avatars, payment sources, invoices and the Stripe webhook. An agent has no business
