@@ -169,9 +169,12 @@ Deliberate limits, because the alternative is worse than drift:
   recreated. Pass `--restart`, or follow with `zops service restart`. A *reload* is not enough —
   it does not re-read environment variables.
 - **An update keeps a variable's sensitivity** (`zops env set`, `zops project env set`). Changing
-  a secret's value needs no flag; `--no-sensitive` is the only way to make it readable. zops
-  0.4.0 and older dropped the flag on updates, which turned an updated secret into a plain variable:
-  check `SENSITIVE` in `zops env list` for secrets changed with an older zops.
+  a secret's value needs no flag; `--no-sensitive` makes it readable. `zops env import` and
+  `zops project env import` replace everything from a dotenv file, which has no way to mark a
+  secret: check `SENSITIVE` afterwards. `zops env set` in zops 0.4.0 and older dropped the flag on updates
+  and turned an updated secret into a plain variable: check `SENSITIVE` in `zops env list` for
+  secrets changed that way. In those versions `zops project env list/set/unset` could not see
+  existing project variables at all.
 - **`zops env list` fails with `serviceStackNotFound` before the first deploy**, and never shows
   `run.envVariables` at all — those are baked into the app version, not stored on the service. Use
   `zops env show` for what the process actually sees. See
