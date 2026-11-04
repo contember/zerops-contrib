@@ -353,6 +353,11 @@ zcli vpn down
 - **`dig`/`nslookup`/`host` bypass the system resolver** and report false NXDOMAIN over the VPN.
   Test reachability with `nc -zv db 5432 -w 3` instead.
 
+**Without root: `zops tunnel`.** `zcli vpn up` needs sudo for its interface, routes and resolver,
+which an agent cannot supply. `zops tunnel db:5432 -- <command>` uses the same VPN API but runs
+WireGuard in userspace (wireproxy) and forwards only the named services to `127.0.0.1`; it changes
+nothing on the machine and works next to a running `zcli vpn`. See `zops-cli.md`.
+
 ## Getting a shell
 
 **SSH works only for runtime services and web servers.** Databases, message brokers and object

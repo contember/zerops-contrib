@@ -44,6 +44,8 @@ export class Context {
   readonly flags: ParsedArgs["flags"];
   readonly args: string[];
   readonly rest: string[];
+  /** Set by a command whose exit status is not its own, e.g. `tunnel -- <command>`. */
+  exitCode?: number;
 
   private cachedClientId?: string;
   private cachedProject?: ProjectSummary;

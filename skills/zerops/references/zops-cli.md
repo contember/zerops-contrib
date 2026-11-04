@@ -29,7 +29,8 @@ always match the documentation shipped beside them. If Bun is missing it says so
 | Restart, reload, scale, env writes, routing, rollback, backups, deploy history | **`zops`** — `zcli` has no command |
 | Git-push builds, CDN, tokens, project/service configuration | **`zops`** — `zcli` has no command |
 | Anything else in the API | `zops api <operationId>` |
-| Connect to the private network | `zcli vpn up` — `zops` deliberately omits VPN |
+| Reach a service on the private network (database, cache) without root | `zops tunnel db:5432 -- <command>` |
+| Put the whole machine on the private network | `zcli vpn up` (needs sudo) |
 | Inside a running container | `zsc` |
 | Zerops Box sandboxes, bases, templates, workspace policy | `zbox` — the workspace API is not in the Zerops API; `zops` handles only the `zbox@1` service itself ([`zbox.md`](zbox.md)) |
 | Agent with MCP already wired up | `zcp` is fine for the operations it covers |
@@ -103,7 +104,38 @@ zops service create db --type postgresql:ha@18   # one service without an import
 zops route http get api.example.com          # DNS and certificate state for a domain
 zops repo connect acme/api api --branch main # build on every push instead of `zops push`
 zops notification list --type ERROR          # failures that happened after the process finished
+zops tunnel db:5432 -- psql -h 127.0.0.1 -p {port} -U db -c 'select 1'   # private network, no sudo
 ```
+
+### Tunnels: an agent's way into the private network
+
+`zops tunnel <service>:<port>[:<local-port>]... [-- command]` registers a fresh WireGuard key
+with the project, runs [wireproxy](https://github.com/windtf/wireproxy) in userspace and forwards
+the named services to `127.0.0.1`. No sudo, no system routes or DNS, no conflict with `zcli vpn`.
+The key is deleted when zops exits.
+
+```sh
+PGPASSWORD="$(zops env get password db -q)" \
+  zops tunnel db:5432 -- psql -h 127.0.0.1 -p {port} -U "$(zops env get user db -q)" -c 'select count(*) from orders'
+zops tunnel db:5432:15432 --ttl 30m --json   # hold open; prints the local address
+```
+
+- **Prefer the `-- command` form**: the tunnel lives exactly as long as the command, and zops
+  exits with the command's status. `{port}` and `$ZOPS_TUNNEL_PORT` are the first local port.
+- Exit 1 with `wireproxy not found` means it is not installed: ask the user to install it (release
+  binary on GitHub) or pass `--wireproxy <path>`. Exit 3 on registration means the token is
+  `READ_ONLY` in that project; a VPN key needs `BASIC_USER` or more.
+- Give targets as plain hostnames; zops resolves them as `<hostname>.zerops`.
+- The tunnel is network access only. Credentials come from `zops env get <key> <service>`
+  (Postgres: `user`, `password`, `dbName`). Do not print them; pass them through the environment.
+- Exit 7 means the project's network never answered through the tunnel (30s, or `--timeout` if
+  shorter). A message that a port "is not held by wireproxy" means another local process
+  listens there; pick another local port.
+- A tunnel without a command ends after `--ttl` (default 1h); stop it earlier with SIGINT or
+  SIGTERM (exit 130/143) and zops still deletes its key. Only a SIGKILLed zops leaves its key
+  behind, until the next `zops tunnel` to the same project removes it.
+- To stop a tunnel that runs a command, send SIGTERM. A SIGINT counts as Ctrl-C while zops is in
+  the terminal's foreground, and Ctrl-C belongs to the command.
 
 ## `zops apply` — the closest thing to declarative infrastructure
 
