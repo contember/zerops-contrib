@@ -202,7 +202,7 @@ not disturbed.
 PGPASSWORD="$(zops env get password db -q)" \
   zops tunnel db:5432 -- psql -h 127.0.0.1 -p {port} -U "$(zops env get user db -q)" -c 'select 1'
 
-# Or hold it open: prints the local addresses, closes on Ctrl-C or after --ttl (default 1h).
+# Or hold it open: prints the local addresses, closes on Ctrl-C (exit 130) or after --ttl (default 1h).
 zops tunnel db:5432:15432 cache:6379 --ttl 30m --json
 ```
 
@@ -210,10 +210,16 @@ zops tunnel db:5432:15432 cache:6379 --ttl 30m --json
   binaries on GitHub), and a token with at least `BASIC_USER` in the project. A `READ_ONLY`
   token cannot register a VPN key.
 - **A fresh key per run.** zops registers a new WireGuard key with the project and deletes it on
-  exit. The private key is held in memory and, briefly, in a 0600 file in a private temp
-  directory that is removed once wireproxy has read it. A run killed before its teardown leaves
-  the public key in `~/.config/zops/tunnels.json`; the next tunnel to that project deletes it and
-  stops the orphaned wireproxy.
+  exit, also when interrupted at any point. The private key goes to wireproxy on stdin and is
+  never written to disk.
+- **Up means up.** zops runs the command (or prints the addresses) only once the project's
+  resolver answers through the tunnel and every forward is held by wireproxy itself, not by some
+  other process that took the port first. It waits up to 30s, or `--timeout` if shorter (exit 7).
+- **Ctrl-C belongs to the command.** wireproxy runs in its own process group, so cancelling a
+  query in `psql` does not take the tunnel down; SIGTERM and SIGHUP sent to zops are passed on.
+- **SIGKILL is the one thing zops cannot clean up after.** The run's public key and pids stay in
+  `~/.config/zops/tunnels/`, and the next tunnel to the same project deletes the key and stops
+  the orphaned wireproxy. Leftovers of other projects wait for a tunnel to those.
 - **Names resolve as `<hostname>.zerops`** through the project's resolver; targets are always
   given as plain hostnames.
 - **The tunnel is network access, not credentials.** Database users and passwords still come

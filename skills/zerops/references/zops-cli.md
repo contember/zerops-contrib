@@ -128,8 +128,12 @@ zops tunnel db:5432:15432 --ttl 30m --json   # hold open; prints the local addre
 - Give targets as plain hostnames; zops resolves them as `<hostname>.zerops`.
 - The tunnel is network access only. Credentials come from `zops env get <key> <service>`
   (Postgres: `user`, `password`, `dbName`). Do not print them; pass them through the environment.
-- A long-running tunnel without a command ends after `--ttl` (default 1h). A run that was killed
-  leaves its key behind until the next `zops tunnel` to the same project removes it.
+- Exit 7 means the project's network never answered through the tunnel (30s, or `--timeout` if
+  shorter). A message that a port "is not held by wireproxy" means another local process
+  listens there; pick another local port.
+- A tunnel without a command ends after `--ttl` (default 1h); stop it earlier with SIGINT or
+  SIGTERM (exit 130/143) and zops still deletes its key. Only a SIGKILLed zops leaves its key
+  behind, until the next `zops tunnel` to the same project removes it.
 
 ## `zops apply` — the closest thing to declarative infrastructure
 
