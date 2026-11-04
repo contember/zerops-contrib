@@ -216,7 +216,9 @@ zops tunnel db:5432:15432 cache:6379 --ttl 30m --json
   resolver answers through the tunnel and every forward is held by wireproxy itself, not by some
   other process that took the port first. It waits up to 30s, or `--timeout` if shorter (exit 7).
 - **Ctrl-C belongs to the command.** wireproxy runs in its own process group, so cancelling a
-  query in `psql` does not take the tunnel down; SIGTERM and SIGHUP sent to zops are passed on.
+  query in `psql` does not take the tunnel down. SIGTERM and SIGHUP sent to zops are passed on to
+  the command, and SIGINT too when stdin is not a terminal (a parent process stopping zops).
+  A held tunnel whose stdout is closed (`| head`) tears down and exits 0.
 - **SIGKILL is the one thing zops cannot clean up after.** The run's public key and pids stay in
   `~/.config/zops/tunnels/`, and the next tunnel to the same project deletes the key and stops
   the orphaned wireproxy. Leftovers of other projects wait for a tunnel to those.
