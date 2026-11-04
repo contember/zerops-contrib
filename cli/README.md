@@ -164,6 +164,7 @@ zops version list api                         # deploy history
 zops version rollback api --yes               # redeploy the previous version
 
 zops env set LOG_LEVEL debug api --restart    # writes do not restart on their own
+zops env set API_KEY - api --sensitive        # a new secret from stdin; later updates keep it secret
 zops env show db -q                           # every generated variable, keys only
 zops scale set api --min-containers 2 --max-containers 5
 zops backup create db --tag pre-migration
