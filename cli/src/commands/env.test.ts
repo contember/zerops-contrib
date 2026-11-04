@@ -15,6 +15,7 @@ interface Var {
   content: string;
   sensitive: boolean;
   type?: string;
+  editable?: boolean;
 }
 
 let server: ReturnType<typeof Bun.serve>;
@@ -60,7 +61,8 @@ beforeEach(() => {
   projectEnv = [
     { id: "peSecret", key: "TOKEN", content: "REDACTED", sensitive: true, type: "USER" },
     { id: "pePlain", key: "MODE", content: "production", sensitive: false, type: "USER" },
-    { id: "peSystem", key: "envIsolation", content: "'service'", sensitive: false, type: "SYSTEM" },
+    { id: "peIsolation", key: "envIsolation", content: "'service'", sensitive: false, type: "SYSTEM", editable: true },
+    { id: "peHost", key: "zeropsSubdomainHost", content: "'2932'", sensitive: false, type: "SYSTEM", editable: false },
   ];
 });
 
@@ -123,6 +125,13 @@ describe("zops env set", () => {
     ]);
   });
 
+  test("a key that differs only in case is refused, not created as a plain twin of a secret", async () => {
+    const { exitCode, stderr } = await zops(["env", "set", "api_key", "v", "app"]);
+    expect(exitCode).toBe(2);
+    expect(stderr).toContain("already has 'API_KEY'");
+    expect(writes).toEqual([]);
+  });
+
   test("--dry-run reports the sensitivity the update would send", async () => {
     const { stdout } = await zops(["env", "set", "API_KEY", "x", "app", "--dry-run", "--json"]);
     expect(JSON.parse(stdout)).toMatchObject({ dryRun: true, operation: "UpdateUserDataById", sensitive: true });
@@ -131,10 +140,18 @@ describe("zops env set", () => {
 });
 
 describe("zops project env", () => {
-  test("list shows the project's own variables from GetProjectEnvList, not the platform's", async () => {
+  test("list shows the project's variables and the platform settings a user may change", async () => {
     const { stdout, exitCode } = await zops(["project", "env", "list", "--json"]);
     expect(exitCode).toBe(0);
-    expect(JSON.parse(stdout).map((v: Var) => v.key)).toEqual(["TOKEN", "MODE"]);
+    expect(JSON.parse(stdout).map((v: Var) => v.key)).toEqual(["TOKEN", "MODE", "envIsolation"]);
+  });
+
+  test("set updates an editable platform setting in place and refuses a fixed one", async () => {
+    expect((await zops(["project", "env", "set", "envIsolation", "none"])).exitCode).toBe(0);
+    const fixed = await zops(["project", "env", "set", "zeropsSubdomainHost", "x"]);
+    expect(fixed.exitCode).toBe(2);
+    expect(fixed.stderr).toContain("set by the platform");
+    expect(writes).toEqual([{ method: "PUT", path: "/project-env/peIsolation", body: { key: "envIsolation", content: "none", sensitive: false } }]);
   });
 
   test("set updates an existing variable with its key and keeps it sensitive", async () => {
@@ -154,9 +171,10 @@ describe("zops project env", () => {
     expect(writes).toEqual([{ method: "DELETE", path: "/project-env/pePlain", body: undefined }]);
   });
 
-  test("unset of a missing variable is not found, and a SYSTEM entry counts as missing", async () => {
+  test("unset of a missing variable is not found, and a platform variable is refused", async () => {
     expect((await zops(["project", "env", "unset", "NOPE", "--yes"])).exitCode).toBe(4);
-    expect((await zops(["project", "env", "unset", "envIsolation", "--yes"])).exitCode).toBe(4);
+    expect((await zops(["project", "env", "unset", "envIsolation", "--yes"])).exitCode).toBe(2);
+    expect((await zops(["project", "env", "unset", "token", "--yes"])).exitCode).toBe(2);
     expect(writes).toEqual([]);
   });
 });

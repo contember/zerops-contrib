@@ -8,7 +8,7 @@
 import { readFile } from "node:fs/promises";
 import type { CommandSpec } from "../lib/spec.ts";
 import { settleProcess } from "../lib/process.ts";
-import { notFound } from "../lib/errors.ts";
+import { notFound, usage } from "../lib/errors.ts";
 
 interface UserData {
   id: string;
@@ -33,6 +33,21 @@ async function listUserData(ctx: import("../lib/context.ts").Context, serviceId:
  */
 export function sensitiveForUpdate(flag: boolean | undefined, current: boolean | undefined): boolean {
   return flag ?? current ?? false;
+}
+
+/**
+ * The variable `key` names, if any. The API keeps keys unique regardless of case, so a key that
+ * differs only in case is refused here: creating it would fail, or sit as a second, plain
+ * variable next to a secret.
+ */
+export function findVariable<T extends { key: string }>(vars: T[], key: string, where: string): T | undefined {
+  const exact = vars.find((v) => v.key === key);
+  if (exact) return exact;
+  const other = vars.find((v) => v.key.toLowerCase() === key.toLowerCase());
+  if (other) {
+    throw usage(`${where} already has '${other.key}', which differs from '${key}' only in case`, `Use '${other.key}' to change it.`);
+  }
+  return undefined;
 }
 
 export const SENSITIVE_FLAG = {
@@ -154,12 +169,12 @@ connection strings, credentials) merged with the ones you defined.`,
       "zops env set LOG_LEVEL debug api",
       "echo -n s3cr3t | zops env set API_KEY - api --sensitive --restart",
     ],
-    operations: ["CreateUserData", "UpdateUserDataById"],
+    operations: ["ListServiceStackUserData", "CreateUserData", "UpdateUserDataById"],
     async run(ctx, parsed) {
       const key = parsed.args[0]!;
       const value = parsed.args[1] === "-" ? (await Bun.stdin.text()).replace(/\n$/, "") : parsed.args[1]!;
       const service = await ctx.service(parsed.args[2]);
-      const existing = (await listUserData(ctx, service.id)).find((v) => v.key === key);
+      const existing = findVariable(await listUserData(ctx, service.id), key, `service ${service.name}`);
       const sensitive = existing
         ? sensitiveForUpdate(ctx.flag<boolean>("sensitive"), existing.sensitive)
         : ctx.bool("sensitive");
@@ -197,11 +212,11 @@ connection strings, credentials) merged with the ones you defined.`,
       { name: "service", description: "Service hostname or id. Defaults to --service." },
     ],
     flags: [RESTART_FLAG],
-    operations: ["DeleteUserDataById"],
+    operations: ["ListServiceStackUserData", "DeleteUserDataById"],
     async run(ctx, parsed) {
       const key = parsed.args[0]!;
       const service = await ctx.service(parsed.args[1]);
-      const existing = (await listUserData(ctx, service.id)).find((v) => v.key === key);
+      const existing = findVariable(await listUserData(ctx, service.id), key, `service ${service.name}`);
       if (!existing) {
         throw notFound(`service ${service.name} has no variable '${key}'`, `Run \`zops env list ${service.name}\`.`);
       }

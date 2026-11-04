@@ -4,7 +4,7 @@ import { settleProcess } from "../lib/process.ts";
 import { EXIT, ZopsError, notFound, usage } from "../lib/errors.ts";
 import { esFilter } from "../lib/extra-operations.ts";
 import type { Context, ProjectSummary } from "../lib/context.ts";
-import { SENSITIVE_FLAG, sensitiveForUpdate } from "./env.ts";
+import { SENSITIVE_FLAG, findVariable, sensitiveForUpdate } from "./env.ts";
 
 const PROJECT_COLUMNS = [
   { key: "name", header: "NAME" },
@@ -491,31 +491,37 @@ interface ProjectEnv {
   content: string;
   sensitive?: boolean;
   type?: string;
+  editable?: boolean;
 }
 
 /**
- * The project's own variables. GetProjectDetails carries no variables (`envVariables` exists only
- * on the create-project request), so they come from GetProjectEnvList, minus the platform's SYSTEM
- * entries (envIsolation, zeropsSubdomainHost, ...).
+ * Every project variable, the platform's SYSTEM entries (envIsolation, zeropsSubdomainHost, ...)
+ * included. GetProjectDetails carries none (`envVariables` exists only on the create-project
+ * request), so they come from GetProjectEnvList.
  */
 async function listProjectEnv(ctx: Context, projectId: string): Promise<ProjectEnv[]> {
   const res = await ctx.api.call<{ items?: ProjectEnv[] }>("GetProjectEnvList", { path: { id: projectId } });
-  return (res.items ?? []).filter((v) => v.type !== "SYSTEM");
+  return res.items ?? [];
 }
+
+/** User variables and the platform settings a user may change (envIsolation, sshIsolation). */
+const changeable = (v: ProjectEnv) => v.type !== "SYSTEM" || v.editable === true;
 
 export const projectEnvCommands: CommandSpec[] = [
   {
     path: ["project", "env", "list"],
     summary: "List project-level environment variables.",
-    description: "Project variables are visible to every service. Service-scoped variables live under `zops env`.",
+    description:
+      "Project variables are visible to every service. Service-scoped variables live under `zops env`. Platform settings a user may change (envIsolation, sshIsolation) are listed with TYPE SYSTEM.",
     operations: ["GetProjectEnvList"],
     async run(ctx) {
-      const vars = await listProjectEnv(ctx, await ctx.projectId());
+      const vars = (await listProjectEnv(ctx, await ctx.projectId())).filter(changeable);
       ctx.out.data(vars, {
         columns: [
           { key: "key", header: "KEY" },
           { key: "content", header: "VALUE" },
           { key: "sensitive", header: "SENSITIVE" },
+          { key: "type", header: "TYPE" },
         ],
         quietField: "key",
         emptyMessage: "no project variables",
@@ -536,7 +542,10 @@ export const projectEnvCommands: CommandSpec[] = [
       const key = parsed.args[0]!;
       const value = parsed.args[1] === "-" ? (await Bun.stdin.text()).replace(/\n$/, "") : parsed.args[1]!;
       const projectId = await ctx.projectId();
-      const existing = (await listProjectEnv(ctx, projectId)).find((v) => v.key === key);
+      const existing = findVariable(await listProjectEnv(ctx, projectId), key, "the project");
+      if (existing && !changeable(existing)) {
+        throw usage(`'${existing.key}' is set by the platform and cannot be changed`);
+      }
       const sensitive = existing
         ? sensitiveForUpdate(ctx.flag<boolean>("sensitive"), existing.sensitive)
         : ctx.bool("sensitive");
@@ -568,8 +577,11 @@ export const projectEnvCommands: CommandSpec[] = [
     operations: ["GetProjectEnvList", "DeleteProjectEnv"],
     async run(ctx, parsed) {
       const key = parsed.args[0]!;
-      const existing = (await listProjectEnv(ctx, await ctx.projectId())).find((v) => v.key === key);
+      const existing = findVariable(await listProjectEnv(ctx, await ctx.projectId()), key, "the project");
       if (!existing) throw notFound(`project has no variable '${key}'`, "Run `zops project env list`.");
+      if (existing.type === "SYSTEM") {
+        throw usage(`'${existing.key}' is a platform variable and cannot be deleted`, "Change it with `zops project env set` if it is editable.");
+      }
       await ctx.confirm(`delete project variable ${key}`);
       if (ctx.dryRun) return { dryRun: true, operation: "DeleteProjectEnv", key };
       const proc = await ctx.api.call<{ id: string }>("DeleteProjectEnv", { path: { id: existing.id } });
