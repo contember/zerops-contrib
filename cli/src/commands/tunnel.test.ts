@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { processStart } from "./tunnel.ts";
 
 /**
  * `zops tunnel` end to end against a stand-in API and a fake wireproxy
@@ -208,11 +209,7 @@ describe("zops tunnel", () => {
   test("deletes keys and stops wireproxies that killed runs left behind, in this project only", async () => {
     mkdirSync(stateDir(), { recursive: true });
     // As zops records it: pinned to UTC and the C locale.
-    const lstart = (pid: number) =>
-      Bun.spawnSync(["ps", "-o", "lstart=", "-p", String(pid)], {
-        stdout: "pipe",
-        env: { PATH: process.env.PATH!, LC_ALL: "C", TZ: "UTC" },
-      }).stdout.toString().trim();
+    const lstart = (pid: number) => processStart(pid)!;
     // A dead zops whose wireproxy is still running.
     const orphan = Bun.spawn(["sleep", "30"]);
     const dead = { projectId: PROJECT_ID, publicKey: "dead-key", pid: 2 ** 22 + 1, pidStarted: null, wireproxyPid: orphan.pid, wireproxyStarted: lstart(orphan.pid), startedAt: "2026-11-04T00:00:00Z" };
@@ -401,7 +398,7 @@ describe("zops tunnel", () => {
     }
   });
 
-  test.skipIf(!Bun.which("script"))("a terminal Ctrl-C reaches the command once, also with stdin redirected", async () => {
+  test.skipIf(!Bun.which("script") || !Bun.which("python3"))("a terminal Ctrl-C reaches the command once, also with stdin redirected", async () => {
     // Under a pseudo-terminal zops is in the foreground group; the group signal below is what
     // the terminal sends on Ctrl-C. stdin is a file, so "is stdin a terminal" would get it wrong.
     const count = join(home, "count");
@@ -447,6 +444,12 @@ describe("zops tunnel", () => {
     expect(stderr).not.toContain("does not exist");
     expect(exitCode).toBe(0);
     expect(deleted).toEqual(created);
+    // Not on PATH: said so before anything is registered.
+    created.length = 0;
+    const missing = await run(["tunnel", "db:5432", "-P", PROJECT_ID, "--", "true"], { ZOPS_WIREPROXY: "fake-wireproxy.ts", PATH: "/usr/bin:/bin" });
+    expect(missing.exitCode).toBe(1);
+    expect(missing.stderr).toContain("wireproxy 'fake-wireproxy.ts' is not on PATH");
+    expect(created).toEqual([]);
   });
 
   test("--json after -- does not switch zops's own errors to JSON", async () => {

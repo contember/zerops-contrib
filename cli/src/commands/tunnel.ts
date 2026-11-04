@@ -76,17 +76,39 @@ function alive(pid: number): boolean {
   }
 }
 
-/** When `pid` started, as `ps` reports it; null if it is not running or ps cannot tell. */
-function processStart(pid: number): string | null {
+/**
+ * The fields of /proc/<pid>/stat from the state on (field 3, so field n is at index n - 3), or
+ * null off Linux. The command name before them may itself hold spaces and parentheses.
+ */
+function procStat(pid: number): string[] | null {
+  if (process.platform !== "linux") return null;
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    return stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * When `pid` started; null if it is not running or this cannot be told. Linux reads it from /proc
+ * (clock ticks since boot), so slim images without procps work; elsewhere `ps` reports it.
+ */
+export function processStart(pid: number): string | null {
   if (!alive(pid)) return null;
-  // lstart is local, localised time: pinned, or a tunnel started under another TZ or locale would
-  // read every live record as stale and delete its key.
-  const ps = Bun.spawnSync(["ps", "-o", "lstart=", "-p", String(pid)], {
-    stdout: "pipe",
-    stderr: "ignore",
-    env: { PATH: process.env.PATH ?? "/usr/bin:/bin", LC_ALL: "C", TZ: "UTC" },
-  });
-  return ps.stdout.toString().trim() || null;
+  if (process.platform === "linux") return procStat(pid)?.[19] ?? null;
+  try {
+    // lstart is local, localised time: pinned, or a tunnel started under another TZ or locale
+    // would read every live record as stale and delete its key.
+    const ps = Bun.spawnSync(["ps", "-o", "lstart=", "-p", String(pid)], {
+      stdout: "pipe",
+      stderr: "ignore",
+      env: { PATH: process.env.PATH ?? "/usr/bin:/bin", LC_ALL: "C", TZ: "UTC" },
+    });
+    return ps.stdout.toString().trim() || null;
+  } catch {
+    return null;
+  }
 }
 
 /** The process recorded under `pid` is still the one running there, not a later one reusing it. */
@@ -104,7 +126,8 @@ async function sweepStale(ctx: Context, projectId: string): Promise<number> {
   let removed = 0;
   for (const record of readRecords()) {
     if (record.projectId !== projectId || stillRunning(record.pid, record.pidStarted)) continue;
-    if (record.wireproxyPid && stillRunning(record.wireproxyPid, record.wireproxyStarted)) {
+    // Without a recorded start time the pid may belong to anything by now: leave it alone.
+    if (record.wireproxyPid && record.wireproxyStarted && stillRunning(record.wireproxyPid, record.wireproxyStarted)) {
       try {
         process.kill(record.wireproxyPid, "SIGTERM");
       } catch {
@@ -202,16 +225,36 @@ async function freePort(): Promise<number> {
  * terminal still gets the Ctrl-C, and so does the command in the same group.
  */
 function inTerminalForeground(): boolean {
-  const ps = Bun.spawnSync(["ps", "-o", "tpgid=,pgid=", "-p", String(process.pid)], { env: { PATH: process.env.PATH ?? "" } });
-  const [tpgid, pgid] = ps.stdout.toString().trim().split(/\s+/).map(Number);
+  let tpgid: number | undefined;
+  let pgid: number | undefined;
+  const stat = procStat(process.pid);
+  if (stat) {
+    // /proc rather than ps: busybox ps (Alpine) has no -p.
+    [pgid, tpgid] = [Number(stat[2]), Number(stat[5])];
+  } else {
+    try {
+      const ps = Bun.spawnSync(["ps", "-o", "tpgid=,pgid=", "-p", String(process.pid)], { stderr: "ignore" });
+      [tpgid, pgid] = ps.stdout.toString().trim().split(/\s+/).map(Number);
+    } catch {}
+  }
+  // Cannot tell: a terminal on stdin is the next best sign that a Ctrl-C came from it.
+  if (!Number.isInteger(tpgid) || !Number.isInteger(pgid)) return Boolean(process.stdin.isTTY);
   // No controlling terminal shows as 0 (macOS) or -1 (Linux).
-  return tpgid !== undefined && tpgid > 0 && tpgid === pgid;
+  return tpgid! > 0 && tpgid === pgid;
 }
 
 /** The wireproxy binary, checked up front so a bad path fails before a key is registered. */
 function findWireproxy(explicit: string | undefined): string {
-  // A bare name (`ZOPS_WIREPROXY=wireproxy`) is looked up on PATH, as a shell would.
-  const found = explicit ? (explicit.includes("/") ? explicit : (Bun.which(explicit) ?? explicit)) : Bun.which("wireproxy");
+  // A bare name (`ZOPS_WIREPROXY=wireproxy`) is looked up on PATH, as a shell and spawn would.
+  if (explicit && !explicit.includes("/") && !Bun.which(explicit)) {
+    throw new ZopsError({
+      code: "dependencyMissing",
+      message: `wireproxy '${explicit}' is not on PATH`,
+      exitCode: EXIT.ERROR,
+      hint: "Put it on PATH, or give --wireproxy / ZOPS_WIREPROXY a path (./wireproxy, /opt/bin/wireproxy).",
+    });
+  }
+  const found = explicit ? (explicit.includes("/") ? explicit : Bun.which(explicit)!) : Bun.which("wireproxy");
   if (found && explicit) {
     let problem: string | undefined;
     try {
@@ -453,7 +496,9 @@ wireproxy itself; that waits up to 30s, or --timeout if shorter.
 With a command after \`--\`, zops runs it once the tunnel is up and exits with its status. In the
 command, {port} is replaced by the first tunnel's local port, also exported as ZOPS_TUNNEL_PORT
 (and ZOPS_TUNNEL_HOST=127.0.0.1). A terminal Ctrl-C goes to the command, not the tunnel; SIGTERM
-and SIGHUP sent to zops are passed on, and SIGINT too when stdin is not a terminal. Without a command,
+and SIGHUP sent to zops are passed on, and SIGINT too when zops is not in the terminal's
+foreground (in the foreground any SIGINT counts as Ctrl-C, so scripts should stop it with
+SIGTERM). Without a command,
 zops prints the local addresses and holds the tunnel until it is interrupted (exit 128+signal) or
 --ttl runs out (exit 0).
 
@@ -585,9 +630,11 @@ token with at least the BASIC_USER role in the project.`,
           );
           // A terminal Ctrl-C goes to the whole foreground group, so it already reached the
           // command (psql cancels a query and goes on); passing it on would deliver it twice. SIGINT
-          // is forwarded only when zops is not in its terminal's foreground group, where a parent
-          // process sent it to zops alone (child.kill("SIGINT"), a background job). Termination
-          // signals always are.
+          // is forwarded only when zops is not in its terminal's foreground group: a detached
+          // supervisor, a job in the background, no terminal at all. Without siginfo zops cannot
+          // tell who sent it, so in the foreground every SIGINT counts as a Ctrl-C, also one from
+          // a script's `kill -INT`; such callers should send SIGTERM. Termination signals always
+          // are forwarded.
           signals.route((sig) => {
             if (sig !== "SIGINT" || !inTerminalForeground()) child.kill(sig);
           });
