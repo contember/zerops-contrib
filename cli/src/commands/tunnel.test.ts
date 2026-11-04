@@ -124,13 +124,14 @@ async function until(cond: () => boolean, ms = 10_000) {
     await Bun.sleep(50);
   }
 }
-const PROBE = "import socket,sys; print(socket.create_connection(('127.0.0.1', int(sys.argv[1]))).recv(100).decode().strip())";
+/** Prints what answers on 127.0.0.1:$1, from a shell command. */
+const PROBE = `"${process.execPath}" "${join(import.meta.dir, "fixtures", "probe.ts")}"`;
 
 describe("zops tunnel", () => {
   test("runs a command through the tunnel, passes its exit code on, and deletes the key", async () => {
     const { stdout, stderr, exitCode } = await run([
       "tunnel", "db:5432", "-P", PROJECT_ID, "--",
-      "sh", "-c", `python3 -c "${PROBE}" "$1"; echo "env=$ZOPS_TUNNEL_HOST:$ZOPS_TUNNEL_PORT arg=$1"; exit 7`, "sh", "{port}",
+      "sh", "-c", `${PROBE} "$1"; echo "env=$ZOPS_TUNNEL_HOST:$ZOPS_TUNNEL_PORT arg=$1"; exit 7`, "sh", "{port}",
     ]);
     expect(exitCode).toBe(7);
     const [pong, envLine] = stdout.trim().split("\n");
@@ -208,13 +209,13 @@ describe("zops tunnel", () => {
 
   test("deletes keys and stops wireproxies that killed runs left behind, in this project only", async () => {
     mkdirSync(stateDir(), { recursive: true });
-    // As zops records it: pinned to UTC and the C locale.
-    const lstart = (pid: number) => processStart(pid)!;
+    // A start time as zops records it (clock ticks on Linux, pinned lstart elsewhere).
+    const startOf = (pid: number) => processStart(pid)!;
     // A dead zops whose wireproxy is still running.
     const orphan = Bun.spawn(["sleep", "30"]);
-    const dead = { projectId: PROJECT_ID, publicKey: "dead-key", pid: 2 ** 22 + 1, pidStarted: null, wireproxyPid: orphan.pid, wireproxyStarted: lstart(orphan.pid), startedAt: "2026-11-04T00:00:00Z" };
+    const dead = { projectId: PROJECT_ID, publicKey: "dead-key", pid: 2 ** 22 + 1, pidStarted: null, wireproxyPid: orphan.pid, wireproxyStarted: startOf(orphan.pid), startedAt: "2026-11-04T00:00:00Z" };
     // A live pid that was reused after the zops recorded under it died (start time differs).
-    const reused = { ...dead, publicKey: "reused-pid-key", pid: process.pid, pidStarted: "Thu Jan  1 00:00:00 2015", wireproxyPid: undefined, wireproxyStarted: undefined };
+    const reused = { ...dead, publicKey: "reused-pid-key", pid: process.pid, pidStarted: "a start time this pid never had", wireproxyPid: undefined, wireproxyStarted: undefined };
     // Another project's leftovers are not this run's to touch.
     const other = { ...dead, projectId: "OtherProjectId00000001", publicKey: "other-project-key", wireproxyPid: undefined };
     for (const r of [dead, reused, other]) writeFileSync(recordFile(r.publicKey), JSON.stringify(r));
@@ -249,7 +250,7 @@ describe("zops tunnel", () => {
       process.execPath,
       [
         join(import.meta.dir, "..", "index.ts"), "tunnel", "db:5432", "-P", PROJECT_ID, "--",
-        "sh", "-c", `trap "" INT; sleep 1.5; python3 -c "${PROBE}" "$1"`, "sh", "{port}",
+        "sh", "-c", `trap "" INT; sleep 1.5; ${PROBE} "$1"`, "sh", "{port}",
       ],
       { detached: true, stdio: ["ignore", "pipe", "pipe"], env: env() },
     );
@@ -398,16 +399,13 @@ describe("zops tunnel", () => {
     }
   });
 
-  test.skipIf(!Bun.which("script") || !Bun.which("python3"))("a terminal Ctrl-C reaches the command once, also with stdin redirected", async () => {
+  test.skipIf(!Bun.which("script"))("a terminal Ctrl-C reaches the command once, also with stdin redirected", async () => {
     // Under a pseudo-terminal zops is in the foreground group; the group signal below is what
     // the terminal sends on Ctrl-C. stdin is a file, so "is stdin a terminal" would get it wrong.
     const count = join(home, "count");
     const pgidFile = join(home, "pgid");
-    const counter =
-      "import os,signal,sys,time; n=[0]; signal.signal(signal.SIGINT, lambda *a: n.__setitem__(0, n[0]+1)); " +
-      "open(sys.argv[2],'w').write(str(os.getpgid(0))); time.sleep(2); open(sys.argv[1],'w').write(str(n[0]))";
     const q = (a: string) => `'${a.replaceAll("'", `'\\''`)}'`;
-    const line = [process.execPath, join(import.meta.dir, "..", "index.ts"), "tunnel", "db:5432", "-P", PROJECT_ID, "--", "python3", "-c", counter, count, pgidFile]
+    const line = [process.execPath, join(import.meta.dir, "..", "index.ts"), "tunnel", "db:5432", "-P", PROJECT_ID, "--", process.execPath, join(import.meta.dir, "fixtures", "sigint-counter.ts"), count, pgidFile]
       .map(q)
       .join(" ");
     const shell = `${line} < /dev/null`;
@@ -432,6 +430,31 @@ describe("zops tunnel", () => {
       }
       proc.kill("SIGKILL");
       await proc.exited;
+    }
+  });
+
+  test("a live tunnel's key survives a second run that sees a trimmed PATH", async () => {
+    const held = spawn(process.execPath, [join(import.meta.dir, "..", "index.ts"), "tunnel", "db:5432", "-P", PROJECT_ID, "--ttl", "1m"], {
+      detached: true,
+      stdio: ["ignore", "ignore", "pipe"],
+      env: env(),
+    });
+    try {
+      let stderr = "";
+      held.stderr!.on("data", (d) => (stderr += d));
+      const exited = new Promise<number | null>((resolve) => held.once("exit", (code) => resolve(code)));
+      await until(() => stderr.includes("→"));
+      const heldKey = created[0]!;
+      // Only bun on PATH: whatever this run can or cannot look up, the held tunnel is not stale.
+      await run(["tunnel", "db:5432", "-P", PROJECT_ID, "--", "true"], { PATH: join(process.execPath, "..") });
+      expect(deleted).not.toContain(heldKey);
+      held.kill("SIGTERM");
+      expect(await exited).toBe(143);
+      expect(deleted).toContain(heldKey);
+    } finally {
+      try {
+        process.kill(-held.pid!, "SIGKILL");
+      } catch {}
     }
   });
 

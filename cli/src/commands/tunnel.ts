@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { accessSync, constants as fsConstants, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, constants as fsConstants, existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { constants as osConstants } from "node:os";
 import { dirname, join } from "node:path";
@@ -76,6 +76,9 @@ function alive(pid: number): boolean {
   }
 }
 
+/** By absolute path where it exists, so a trimmed PATH cannot hide it. */
+const PS = existsSync("/bin/ps") ? "/bin/ps" : "ps";
+
 /**
  * The fields of /proc/<pid>/stat from the state on (field 3, so field n is at index n - 3), or
  * null off Linux. The command name before them may itself hold spaces and parentheses.
@@ -100,7 +103,7 @@ export function processStart(pid: number): string | null {
   try {
     // lstart is local, localised time: pinned, or a tunnel started under another TZ or locale
     // would read every live record as stale and delete its key.
-    const ps = Bun.spawnSync(["ps", "-o", "lstart=", "-p", String(pid)], {
+    const ps = Bun.spawnSync([PS, "-o", "lstart=", "-p", String(pid)], {
       stdout: "pipe",
       stderr: "ignore",
       env: { PATH: process.env.PATH ?? "/usr/bin:/bin", LC_ALL: "C", TZ: "UTC" },
@@ -111,10 +114,15 @@ export function processStart(pid: number): string | null {
   }
 }
 
-/** The process recorded under `pid` is still the one running there, not a later one reusing it. */
+/**
+ * The process recorded under `pid` is still the one running there, not a later one reusing it.
+ * When either start time is unknown it counts as running: a live tunnel's key must never be
+ * deleted on a guess.
+ */
 function stillRunning(pid: number, started: string | null | undefined): boolean {
   if (!alive(pid)) return false;
-  return !started || processStart(pid) === started;
+  const now = processStart(pid);
+  return !started || now === null || now === started;
 }
 
 async function deleteKey(ctx: Context, projectId: string, publicKey: string): Promise<void> {
@@ -126,12 +134,16 @@ async function sweepStale(ctx: Context, projectId: string): Promise<number> {
   let removed = 0;
   for (const record of readRecords()) {
     if (record.projectId !== projectId || stillRunning(record.pid, record.pidStarted)) continue;
-    // Without a recorded start time the pid may belong to anything by now: leave it alone.
-    if (record.wireproxyPid && record.wireproxyStarted && stillRunning(record.wireproxyPid, record.wireproxyStarted)) {
-      try {
-        process.kill(record.wireproxyPid, "SIGTERM");
-      } catch {
-        // exited meanwhile
+    if (record.wireproxyPid && alive(record.wireproxyPid)) {
+      if (record.wireproxyStarted && processStart(record.wireproxyPid) === record.wireproxyStarted) {
+        try {
+          process.kill(record.wireproxyPid, "SIGTERM");
+        } catch {
+          // exited meanwhile
+        }
+      } else if (!record.wireproxyStarted) {
+        // Without a start time the pid may belong to anything by now: say so instead of killing it.
+        ctx.out.warn(`left pid ${record.wireproxyPid} running: an earlier tunnel's wireproxy had it, but its start time is unknown`);
       }
     }
     try {
@@ -233,7 +245,7 @@ function inTerminalForeground(): boolean {
     [pgid, tpgid] = [Number(stat[2]), Number(stat[5])];
   } else {
     try {
-      const ps = Bun.spawnSync(["ps", "-o", "tpgid=,pgid=", "-p", String(process.pid)], { stderr: "ignore" });
+      const ps = Bun.spawnSync([PS, "-o", "tpgid=,pgid=", "-p", String(process.pid)], { stderr: "ignore" });
       [tpgid, pgid] = ps.stdout.toString().trim().split(/\s+/).map(Number);
     } catch {}
   }
@@ -497,10 +509,9 @@ With a command after \`--\`, zops runs it once the tunnel is up and exits with i
 command, {port} is replaced by the first tunnel's local port, also exported as ZOPS_TUNNEL_PORT
 (and ZOPS_TUNNEL_HOST=127.0.0.1). A terminal Ctrl-C goes to the command, not the tunnel; SIGTERM
 and SIGHUP sent to zops are passed on, and SIGINT too when zops is not in the terminal's
-foreground (in the foreground any SIGINT counts as Ctrl-C, so scripts should stop it with
-SIGTERM). Without a command,
-zops prints the local addresses and holds the tunnel until it is interrupted (exit 128+signal) or
---ttl runs out (exit 0).
+foreground. In the foreground any SIGINT counts as Ctrl-C, so scripts should stop zops with
+SIGTERM. Without a command, zops prints the local addresses and holds the tunnel until it is
+interrupted (exit 128+signal) or --ttl runs out (exit 0).
 
 A zops killed with SIGKILL cannot clean up: its key stays recorded in ${STATE_DIR}
 (public key and pids only), and the next tunnel to the same project deletes it and stops the
