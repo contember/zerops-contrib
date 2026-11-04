@@ -1,12 +1,14 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 
 /**
  * `zops tunnel` end to end against a stand-in API and a fake wireproxy
  * (fixtures/fake-wireproxy.ts), so the whole lifecycle runs without a network: key registered,
- * config handed over and removed, forwards up, command run, key deleted.
+ * config handed over on stdin, forwards verified, command run, key deleted, on every path.
  */
 const PROJECT_ID = "Pr0jectIdForTests00001";
 const FAKE = join(import.meta.dir, "fixtures", "fake-wireproxy.ts");
@@ -72,22 +74,11 @@ beforeEach(() => {
 
 afterEach(() => rmSync(home, { recursive: true, force: true }));
 
-async function run(args: string[], env: Record<string, string> = {}) {
+async function run(args: string[], extra: Record<string, string> = {}) {
   const proc = Bun.spawn([process.execPath, join(import.meta.dir, "..", "index.ts"), ...args], {
     stdout: "pipe",
     stderr: "pipe",
-    env: {
-      ...process.env,
-      NO_COLOR: "1",
-      XDG_CONFIG_HOME: home,
-      ZEROPS_TOKEN: "fake-token",
-      ZEROPS_PROFILE: "",
-      ZEROPS_PROJECT: "",
-      ZEROPS_API_URL: `http://localhost:${server.port}`,
-      ZOPS_WIREPROXY: FAKE,
-      FAKE_WIREPROXY_REPORT: report,
-      ...env,
-    },
+    env: env(extra),
   });
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(proc.stdout).text(),
@@ -97,8 +88,37 @@ async function run(args: string[], env: Record<string, string> = {}) {
   return { stdout, stderr, exitCode };
 }
 
-const stateFile = () => join(home, "zops", "tunnels.json");
-const state = () => (existsSync(stateFile()) ? JSON.parse(readFileSync(stateFile(), "utf8")) : []);
+const env = (extra: Record<string, string> = {}) => ({
+  ...process.env,
+  NO_COLOR: "1",
+  XDG_CONFIG_HOME: home,
+  ZEROPS_TOKEN: "fake-token",
+  ZEROPS_PROFILE: "",
+  ZEROPS_PROJECT: "",
+  ZEROPS_API_URL: `http://localhost:${server.port}`,
+  ZOPS_WIREPROXY: FAKE,
+  FAKE_WIREPROXY_REPORT: report,
+  ...extra,
+});
+const stateDir = () => join(home, "zops", "tunnels");
+const records = () => (existsSync(stateDir()) ? readdirSync(stateDir()).filter((n) => n.endsWith(".json")) : []);
+const recordFile = (publicKey: string) =>
+  join(stateDir(), `${createHash("sha256").update(publicKey).digest("hex").slice(0, 16)}.json`);
+const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+async function until(cond: () => boolean, ms = 10_000) {
+  const deadline = Date.now() + ms;
+  while (!cond()) {
+    if (Date.now() > deadline) throw new Error("condition not met in time");
+    await Bun.sleep(50);
+  }
+}
 const PROBE = "import socket,sys; print(socket.create_connection(('127.0.0.1', int(sys.argv[1]))).recv(100).decode().strip())";
 
 describe("zops tunnel", () => {
@@ -118,9 +138,11 @@ describe("zops tunnel", () => {
     expect(deleted).toEqual(created);
     const seen = JSON.parse(readFileSync(report, "utf8"));
     expect(seen.publicKey).toBe(created[0]);
-    expect(existsSync(seen.configPath)).toBe(false);
-    expect(existsSync(dirname(seen.configPath))).toBe(false);
-    expect(state()).toEqual([]);
+    // The config, private key included, travels on stdin and never touches the disk.
+    expect(seen.configPath).toBe("/dev/stdin");
+    expect(seen.checkAlive).toBe(true);
+    expect(alive(seen.pid)).toBe(false);
+    expect(records()).toEqual([]);
     expect(`${stdout}${stderr}`).not.toContain("PrivateKey");
   });
 
@@ -132,6 +154,7 @@ describe("zops tunnel", () => {
     expect(out.tunnels.map((t: { service: string; port: number }) => `${t.service}:${t.port}`)).toEqual(["db:5432", "cache:6379"]);
     for (const t of out.tunnels) expect(t.local).toBe(`127.0.0.1:${t.localPort}`);
     expect(deleted).toEqual(created);
+    expect(records()).toEqual([]);
   });
 
   test("an unknown service fails before any key is registered", async () => {
@@ -144,10 +167,30 @@ describe("zops tunnel", () => {
   test("a wireproxy that fails to start is reported, and its key is still deleted", async () => {
     const { stderr, exitCode } = await run(["tunnel", "db:5432", "-P", PROJECT_ID, "--", "true"], { FAKE_WIREPROXY_FAIL: "1" });
     expect(exitCode).toBe(1);
-    expect(stderr).toContain("bad config: Endpoint is unreachable");
+    expect(stderr).toContain("wireproxy exited before the tunnel was up: invalid base64 string: [redacted]");
+    expect(stderr).not.toContain("iKfPMINJ");
     expect(created).toHaveLength(1);
     expect(deleted).toEqual(created);
-    expect(state()).toEqual([]);
+    expect(records()).toEqual([]);
+  });
+
+  test("a forward port held by another process fails closed: the command never runs", async () => {
+    // Stands in for a local process that grabbed the port between zops picking it and wireproxy
+    // binding it; it would otherwise receive whatever the command sends, credentials included.
+    const squatter = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {}, open: (s) => void s.end("SQUAT\n") } });
+    try {
+      const marker = join(home, "ran");
+      const { stderr, exitCode } = await run(
+        ["tunnel", `db:5432:${squatter.port}`, "-P", PROJECT_ID, "--", "touch", marker],
+        { FAKE_WIREPROXY_SKIP: String(squatter.port) },
+      );
+      expect(exitCode).toBe(1);
+      expect(stderr).toContain(`127.0.0.1:${squatter.port} is not held by wireproxy`);
+      expect(existsSync(marker)).toBe(false);
+      expect(deleted).toEqual(created);
+    } finally {
+      squatter.stop(true);
+    }
   });
 
   test("without wireproxy it says how to get it and registers nothing", async () => {
@@ -158,15 +201,110 @@ describe("zops tunnel", () => {
     expect(created).toEqual([]);
   });
 
-  test("deletes the key a killed run left behind in the same project", async () => {
-    mkdirSync(join(home, "zops"), { recursive: true });
-    const stale = { projectId: PROJECT_ID, publicKey: "stale-key", pid: 2 ** 22 + 1, startedAt: "2026-11-04T00:00:00Z" };
-    const other = { ...stale, projectId: "OtherProjectId00000001", publicKey: "other-project-key" };
-    writeFileSync(stateFile(), JSON.stringify([stale, other]));
+  test("deletes keys and stops wireproxies that killed runs left behind, in this project only", async () => {
+    mkdirSync(stateDir(), { recursive: true });
+    const lstart = (pid: number) =>
+      Bun.spawnSync(["ps", "-o", "lstart=", "-p", String(pid)], { stdout: "pipe" }).stdout.toString().trim();
+    // A dead zops whose wireproxy is still running.
+    const orphan = Bun.spawn(["sleep", "30"]);
+    const dead = { projectId: PROJECT_ID, publicKey: "dead-key", pid: 2 ** 22 + 1, pidStarted: null, wireproxyPid: orphan.pid, wireproxyStarted: lstart(orphan.pid), startedAt: "2026-11-04T00:00:00Z" };
+    // A live pid that was reused after the zops recorded under it died (start time differs).
+    const reused = { ...dead, publicKey: "reused-pid-key", pid: process.pid, pidStarted: "Thu Jan  1 00:00:00 2015", wireproxyPid: undefined, wireproxyStarted: undefined };
+    // Another project's leftovers are not this run's to touch.
+    const other = { ...dead, projectId: "OtherProjectId00000001", publicKey: "other-project-key", wireproxyPid: undefined };
+    for (const r of [dead, reused, other]) writeFileSync(recordFile(r.publicKey), JSON.stringify(r));
+
     const { exitCode } = await run(["tunnel", "db:5432", "-P", PROJECT_ID, "--", "true"]);
     expect(exitCode).toBe(0);
-    expect(deleted).toEqual(["stale-key", created[0]!]);
-    expect(state()).toEqual([other]);
+    expect(deleted.slice(0, 2).sort()).toEqual(["dead-key", "reused-pid-key"]);
+    expect(deleted[2]).toBe(created[0]!);
+    expect(records()).toEqual([recordFile("other-project-key").split("/").pop()!]);
+    await orphan.exited;
+    expect(orphan.signalCode).toBe("SIGTERM");
+  });
+
+  test("a signal before the tunnel is up still deletes the key and stops wireproxy", async () => {
+    const proc = Bun.spawn([process.execPath, join(import.meta.dir, "..", "index.ts"), "tunnel", "db:5432", "-P", PROJECT_ID, "--", "true"], {
+      stdout: "pipe",
+      stderr: "pipe",
+      env: env({ FAKE_WIREPROXY_DELAY_MS: "20000" }),
+    });
+    await until(() => created.length === 1 && existsSync(report));
+    const fakePid = JSON.parse(readFileSync(report, "utf8")).pid as number;
+    proc.kill("SIGTERM");
+    expect(await proc.exited).toBe(143);
+    expect(deleted).toEqual(created);
+    expect(alive(fakePid)).toBe(false);
+    expect(records()).toEqual([]);
+  });
+
+  test("Ctrl-C in the terminal reaches the command but not the tunnel", async () => {
+    // Its own process group, like a shell job: the group signal below is what a terminal sends.
+    const child = spawn(
+      process.execPath,
+      [
+        join(import.meta.dir, "..", "index.ts"), "tunnel", "db:5432", "-P", PROJECT_ID, "--",
+        "sh", "-c", `trap "" INT; sleep 1.5; python3 -c "${PROBE}" "$1"`, "sh", "{port}",
+      ],
+      { detached: true, stdio: ["ignore", "pipe", "pipe"], env: env() },
+    );
+    let stdout = "";
+    let stderr = "";
+    child.stdout!.on("data", (d) => (stdout += d));
+    child.stderr!.on("data", (d) => (stderr += d));
+    const exited = new Promise<number | null>((resolve) => child.once("exit", (code) => resolve(code)));
+    await until(() => stderr.includes("→"));
+    process.kill(-child.pid!, "SIGINT");
+    expect(await exited).toBe(0);
+    expect(stdout.trim()).toBe("PONG db.zerops:5432");
+    expect(deleted).toEqual(created);
+  });
+
+  test("a held tunnel closes promptly on SIGINT with 130, however long its --ttl", async () => {
+    const proc = Bun.spawn([process.execPath, join(import.meta.dir, "..", "index.ts"), "tunnel", "db:5432", "-P", PROJECT_ID, "--ttl", "1h"], {
+      stdout: "pipe",
+      stderr: "pipe",
+      env: env(),
+    });
+    try {
+      let stderr = "";
+      void (async () => {
+        for await (const chunk of proc.stderr) stderr += new TextDecoder().decode(chunk);
+      })();
+      await until(() => stderr.includes("→"));
+      const started = Date.now();
+      proc.kill("SIGINT");
+      expect(await proc.exited).toBe(130);
+      expect(Date.now() - started).toBeLessThan(2500);
+      expect(deleted).toEqual(created);
+      expect(records()).toEqual([]);
+    } finally {
+      proc.kill("SIGKILL");
+    }
+  });
+
+  test("a tunnel that never answers times out under --timeout and cleans up", async () => {
+    const { stderr, exitCode } = await run(["tunnel", "db:5432", "-P", PROJECT_ID, "--timeout", "2s", "--", "true"], {
+      FAKE_WIREPROXY_UNREACHABLE: "1",
+    });
+    expect(exitCode).toBe(7);
+    expect(stderr).toContain("the tunnel did not come up within 2s");
+    expect(stderr).not.toContain("Health metric request");
+    expect(deleted).toEqual(created);
+  });
+
+  test("concurrent tunnels each clean up their own key", async () => {
+    const runs = await Promise.all(Array.from({ length: 6 }, () => run(["tunnel", "db:5432", "-P", PROJECT_ID, "--", "true"])));
+    expect(runs.map((r) => r.exitCode)).toEqual([0, 0, 0, 0, 0, 0]);
+    expect(new Set(created).size).toBe(6);
+    expect([...deleted].sort()).toEqual([...created].sort());
+    expect(records()).toEqual([]);
+  });
+
+  test("--json after -- does not switch zops's own errors to JSON", async () => {
+    const { stderr, exitCode } = await run(["tunnel", "db", "-P", PROJECT_ID, "--", "jq", "--json"]);
+    expect(exitCode).toBe(2);
+    expect(stderr).toStartWith("error: invalid tunnel target");
   });
 
   test("dry-run registers nothing", async () => {

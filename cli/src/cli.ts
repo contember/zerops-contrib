@@ -248,7 +248,7 @@ export async function run(argv: string[]): Promise<number> {
     if (result !== undefined) ctx.out.data(result);
     return ctx.exitCode ?? EXIT.OK;
   } catch (err) {
-    const out = ctx?.out ?? new Output({ json: argv.includes("--json") });
+    const out = ctx?.out ?? new Output({ json: own.includes("--json") });
     if (err instanceof ZopsError) {
       out.fail(err);
       return err.exitCode;

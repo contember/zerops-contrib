@@ -56,10 +56,12 @@ PrivateKey = ${WG_PRIVATE}
 Address = 10.14.128.4/32, fda0:5ef:39e:c0df::4/128
 DNS = 10.14.124.1
 MTU = 1420
+CheckAlive = 10.14.124.1
+CheckAliveInterval = 1
 
 [Peer]
 PublicKey = c2VydmVyLXB1YmxpYy1rZXktZm9yLXRlc3RzLW9ubHk=
-AllowedIPs = 10.14.124.0/22, fda0:5ef:39e:c0de::/64, 10.14.128.0/22, fda0:5ef:39e:c0df::/64
+AllowedIPs = 10.14.124.1/22, fda0:5ef:39e:c0de::/64, 10.14.128.1/22, fda0:5ef:39e:c0df::/64
 Endpoint = proxy.app-prg1.zerops.io:14307
 PersistentKeepalive = 25
 
@@ -81,7 +83,19 @@ Target = cache.zerops:6379
     const config = wireproxyConfig(WG_PRIVATE, v6only, [{ service: "db", port: 5432, localPort: 1 }]);
     expect(config).toContain("Address = fda0:5ef:39e:c0df::4/128\n");
     expect(config).toContain("DNS = fda0:5ef:39e:c0de::1\n");
+    expect(config).toContain("CheckAlive = fda0:5ef:39e:c0de::1\n");
     expect(config).toContain("AllowedIPs = fda0:5ef:39e:c0de::/64, fda0:5ef:39e:c0df::/64\n");
+  });
+
+  test("refuses API values that could add lines or sections to the INI", () => {
+    for (const evil of ["10.14.124.1\n[Socks5]", "10.14.124.1]", "a b"]) {
+      const setup = structuredClone(SETUP);
+      setup.project.ipv4!.network!.gateway = evil;
+      expect(() => wireproxyConfig(WG_PRIVATE, setup, [])).toThrow(/unexpected characters/);
+    }
+    const endpoint = structuredClone(SETUP);
+    endpoint.project.ipv4!.sharedEndpoint = "x:1\nPrivateKey = y";
+    expect(() => wireproxyConfig(WG_PRIVATE, endpoint, [])).toThrow(/unexpected characters/);
   });
 
   test("refuses an incomplete setup instead of writing a config that cannot connect", () => {

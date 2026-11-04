@@ -1,48 +1,69 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { spawn, type ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
+import { mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
-import { tmpdir } from "node:os";
+import { constants as osConstants } from "node:os";
 import { dirname, join } from "node:path";
 import type { Context } from "../lib/context.ts";
 import type { CommandSpec } from "../lib/spec.ts";
 import { userConfigPath } from "../lib/config.ts";
 import { EXIT, ZopsError, usage } from "../lib/errors.ts";
 import { parseDuration } from "../lib/spec.ts";
-import {
-  generateKeyPair,
-  parseTarget,
-  wireproxyConfig,
-  type TunnelTarget,
-  type VpnSetup,
-} from "../lib/wireguard.ts";
+import { generateKeyPair, parseTarget, wireproxyConfig, type KeyPair, type VpnSetup } from "../lib/wireguard.ts";
+
+// --- state: keys registered and not yet deleted -------------------------------------------------
 
 /**
- * Keys this machine registered and has not deleted yet. Public keys and pids only: enough for the
- * next run to remove the peer left behind by a zops that was killed before its teardown.
+ * One file per registered key, so concurrent tunnels never rewrite each other's records. Public
+ * keys, pids and process start times only: enough for a later run to delete the peer, and stop
+ * the wireproxy, of a zops that was killed before its teardown.
  */
-const STATE_FILE = join(dirname(userConfigPath), "tunnels.json");
+const STATE_DIR = join(dirname(userConfigPath), "tunnels");
 
 interface TunnelRecord {
   projectId: string;
   publicKey: string;
-  /** The zops process that owns the key. */
+  /** The zops that owns the key, and when that process started (guards against pid reuse). */
   pid: number;
-  /** Its wireproxy, killed by the sweep if it outlived its zops. */
+  pidStarted: string | null;
   wireproxyPid?: number;
+  wireproxyStarted?: string | null;
   startedAt: string;
 }
 
-function readState(): TunnelRecord[] {
+const recordPath = (publicKey: string) =>
+  join(STATE_DIR, `${createHash("sha256").update(publicKey).digest("hex").slice(0, 16)}.json`);
+
+function saveRecord(record: TunnelRecord): void {
+  mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 });
+  const path = recordPath(record.publicKey);
+  const tmp = `${path}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(record), { mode: 0o600 });
+  renameSync(tmp, path);
+}
+
+function dropRecord(publicKey: string): void {
   try {
-    const data = JSON.parse(readFileSync(STATE_FILE, "utf8"));
-    return Array.isArray(data) ? data : [];
+    unlinkSync(recordPath(publicKey));
   } catch {
-    return [];
+    // already gone
   }
 }
 
-function writeState(records: TunnelRecord[]): void {
-  mkdirSync(dirname(STATE_FILE), { recursive: true });
-  writeFileSync(STATE_FILE, `${JSON.stringify(records, null, 2)}\n`, { mode: 0o600 });
+function readRecords(): TunnelRecord[] {
+  let names: string[];
+  try {
+    names = readdirSync(STATE_DIR).filter((n) => n.endsWith(".json"));
+  } catch {
+    return [];
+  }
+  return names.flatMap((n) => {
+    try {
+      return [JSON.parse(readFileSync(join(STATE_DIR, n), "utf8")) as TunnelRecord];
+    } catch {
+      return [];
+    }
+  });
 }
 
 function alive(pid: number): boolean {
@@ -54,34 +75,103 @@ function alive(pid: number): boolean {
   }
 }
 
-/** True when `pid` is a running wireproxy, so a recycled pid is never killed by mistake. */
-function isWireproxy(pid: number): boolean {
+/** When `pid` started, as `ps` reports it; null if it is not running or ps cannot tell. */
+function processStart(pid: number): string | null {
+  if (!alive(pid)) return null;
+  const ps = Bun.spawnSync(["ps", "-o", "lstart=", "-p", String(pid)], { stdout: "pipe", stderr: "ignore" });
+  return ps.stdout.toString().trim() || null;
+}
+
+/** The process recorded under `pid` is still the one running there, not a later one reusing it. */
+function stillRunning(pid: number, started: string | null | undefined): boolean {
   if (!alive(pid)) return false;
-  const ps = Bun.spawnSync(["ps", "-p", String(pid), "-o", "comm="], { stdout: "pipe", stderr: "ignore" });
-  return ps.stdout.toString().includes("wireproxy");
+  return !started || processStart(pid) === started;
 }
 
 async function deleteKey(ctx: Context, projectId: string, publicKey: string): Promise<void> {
   await ctx.api.call("DeleteProjectVpn", { path: { id: projectId }, body: { publicKey } });
 }
 
-/** Removes the peers of tunnels in this project whose zops is gone. */
+/** Deletes the peers, and stops the wireproxy, of earlier tunnels to this project whose zops is gone. */
 async function sweepStale(ctx: Context, projectId: string): Promise<number> {
-  const stale = readState().filter((r) => r.projectId === projectId && !alive(r.pid));
   let removed = 0;
-  for (const record of stale) {
-    if (record.wireproxyPid && isWireproxy(record.wireproxyPid)) process.kill(record.wireproxyPid, "SIGTERM");
+  for (const record of readRecords()) {
+    if (record.projectId !== projectId || stillRunning(record.pid, record.pidStarted)) continue;
+    if (record.wireproxyPid && stillRunning(record.wireproxyPid, record.wireproxyStarted)) {
+      try {
+        process.kill(record.wireproxyPid, "SIGTERM");
+      } catch {
+        // exited meanwhile
+      }
+    }
     try {
       await deleteKey(ctx, projectId, record.publicKey);
     } catch (err) {
-      // Already gone is fine; anything else stays in the file for the next attempt.
+      // Already gone is fine; anything else stays recorded for the next attempt.
       if (!(err instanceof ZopsError && err.exitCode === EXIT.NOT_FOUND)) continue;
     }
-    writeState(readState().filter((r) => r.publicKey !== record.publicKey));
+    dropRecord(record.publicKey);
     removed++;
   }
   return removed;
 }
+
+// --- signals ----------------------------------------------------------------------------------
+
+const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+type Sig = (typeof SIGNALS)[number];
+
+class Interrupted extends Error {
+  constructor(readonly signal: Sig) {
+    super(`interrupted by ${signal}`);
+  }
+}
+
+const signalExit = (sig: string) => 128 + ((osConstants.signals as Record<string, number>)[sig] ?? 1);
+
+/**
+ * Installed before the key is registered, so a signal at any point reaches the teardown instead
+ * of ending zops with the key registered. By default a signal aborts; `route` hands signals to
+ * another policy (a running command, or teardown that must not be cut short).
+ */
+function watchSignals() {
+  const controller = new AbortController();
+  let route: ((sig: Sig) => void) | undefined;
+  const handlers = SIGNALS.map((sig) => {
+    const handler = () => (route ? route(sig) : controller.abort(new Interrupted(sig)));
+    process.on(sig, handler);
+    return [sig, handler] as const;
+  });
+  return {
+    signal: controller.signal,
+    interrupted: new Promise<Interrupted>((resolve) =>
+      controller.signal.addEventListener("abort", () => resolve(controller.signal.reason as Interrupted)),
+    ),
+    check() {
+      if (controller.signal.aborted) throw controller.signal.reason;
+    },
+    route(fn: (sig: Sig) => void) {
+      route = fn;
+    },
+    dispose() {
+      for (const [sig, handler] of handlers) process.off(sig, handler);
+    },
+  };
+}
+
+/**
+ * A timer that can be cancelled. A pending Bun.sleep keeps the process alive after the race it
+ * lost: a --ttl of 1h would hold zops open for an hour after Ctrl-C.
+ */
+function delay(ms: number): { done: Promise<void>; cancel: () => void } {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const done = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, ms);
+  });
+  return { done, cancel: () => clearTimeout(timer) };
+}
+
+// --- wireproxy --------------------------------------------------------------------------------
 
 async function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -107,28 +197,181 @@ function findWireproxy(explicit: string | undefined): string {
   return found;
 }
 
-/** Polls wireproxy's health endpoint until it is ready, or fails with what it printed. */
-async function waitReady(proc: Bun.Subprocess<"ignore", "pipe", "pipe">, healthPort: number, timeoutMs: number) {
+interface Wireproxy {
+  proc: ChildProcess;
+  exited: Promise<void>;
+  /** Its stderr, trimmed for quoting: health-probe noise dropped, anything key-shaped redacted. */
+  log(): string;
+}
+
+/**
+ * Starts wireproxy with its config on stdin, so the private key is never written to a file, and
+ * in its own process group, so a terminal Ctrl-C meant for the command does not take the tunnel
+ * down with it.
+ */
+function startWireproxy(binary: string, config: string, healthPort: number): Wireproxy {
+  const proc = spawn(binary, ["-c", "/dev/stdin", "-s", "-i", `127.0.0.1:${healthPort}`], {
+    detached: true,
+    stdio: ["pipe", "ignore", "pipe"],
+  });
+  let stderr = "";
+  proc.stderr!.on("data", (chunk: Buffer) => {
+    stderr = (stderr + chunk.toString()).slice(-8000);
+  });
+  let spawnError: Error | undefined;
+  const exited = new Promise<void>((resolve) => {
+    proc.once("exit", () => resolve());
+    proc.once("error", (err) => {
+      spawnError = err;
+      resolve();
+    });
+  });
+  proc.stdin!.on("error", () => {});
+  proc.stdin!.end(config);
+  return {
+    proc,
+    exited,
+    log() {
+      const text = stderr
+        .split("\n")
+        .filter((l) => l.trim() && !l.includes("Health metric request"))
+        .join("\n")
+        .replace(/[A-Za-z0-9+/]{42,43}=/g, "[redacted]")
+        .trim();
+      return (spawnError ? `${spawnError.message}\n${text}` : text).trim().slice(-500);
+    },
+  };
+}
+
+async function stopWireproxy(wp: Wireproxy | undefined): Promise<void> {
+  if (!wp || wp.proc.exitCode !== null || wp.proc.signalCode !== null || wp.proc.pid === undefined) return;
+  wp.proc.kill("SIGTERM");
+  const grace = delay(3000);
+  const stopped = await Promise.race([wp.exited.then(() => true), grace.done.then(() => false)]);
+  grace.cancel();
+  if (!stopped) {
+    wp.proc.kill("SIGKILL");
+    await wp.exited;
+  }
+}
+
+/**
+ * TCP ports `pid` listens on at 127.0.0.1, or null when this system offers no way to tell.
+ * lsof on macOS (and Linux when installed), else /proc on Linux.
+ */
+function loopbackListeners(pid: number): Set<number> | null {
+  const ports = new Set<number>();
+  const lsof = Bun.which("lsof");
+  if (lsof) {
+    // -a: all conditions at once. Exits 1 when nothing matches, which is an empty set here.
+    const r = Bun.spawnSync([lsof, "-nP", "-a", "-p", String(pid), "-iTCP", "-sTCP:LISTEN", "-Fn"], {
+      stdout: "pipe",
+      stderr: "ignore",
+    });
+    for (const line of r.stdout.toString().split("\n")) {
+      const m = /^n127\.0\.0\.1:(\d+)$/.exec(line);
+      if (m) ports.add(Number(m[1]));
+    }
+    return ports;
+  }
+  if (process.platform !== "linux") return null;
+  const inodes = new Set<string>();
+  try {
+    for (const fd of readdirSync(`/proc/${pid}/fd`)) {
+      try {
+        const m = /^socket:\[(\d+)\]$/.exec(readlinkSync(`/proc/${pid}/fd/${fd}`));
+        if (m) inodes.add(m[1]!);
+      } catch {
+        // fd closed meanwhile
+      }
+    }
+    // Columns: sl local_address rem_address st ... inode. 0A is LISTEN; 0100007F is 127.0.0.1.
+    for (const line of readFileSync("/proc/net/tcp", "utf8").split("\n").slice(1)) {
+      const cols = line.trim().split(/\s+/);
+      const [ip, port] = (cols[1] ?? "").split(":");
+      if (cols[3] === "0A" && ip === "0100007F" && inodes.has(cols[9] ?? "")) ports.add(parseInt(port!, 16));
+    }
+  } catch {
+    return null;
+  }
+  return ports;
+}
+
+/**
+ * Waits until the tunnel is actually usable:
+ * - /readyz healthy, which with CheckAlive means the project's resolver answered through the tunnel;
+ * - every forward and the health port listening in wireproxy itself. The ports were free when
+ *   picked but released before wireproxy bound them, and the health endpoint is unauthenticated:
+ *   another local process could take a port in between and receive the credentials meant for the
+ *   database. The OS's view of who holds the port is what counts.
+ */
+async function waitReady(
+  wp: Wireproxy,
+  healthPort: number,
+  ports: number[],
+  timeoutMs: number,
+  abort: AbortSignal,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
+  const pid = wp.proc.pid!;
+  let healthySince: number | undefined;
+  let missing: number[] = [];
   while (Date.now() < deadline) {
-    if (proc.exitCode !== null || proc.signalCode !== null) {
-      const stderr = (await new Response(proc.stderr).text()).trim().slice(-500);
+    if (abort.aborted) throw abort.reason;
+    if (wp.proc.exitCode !== null || wp.proc.signalCode !== null) {
+      await wp.exited;
+      const log = wp.log();
       throw new ZopsError({
         code: "tunnelFailed",
-        message: `wireproxy exited before the tunnel was up${stderr ? `: ${stderr}` : ""}`,
+        message: `wireproxy exited before the tunnel was up${log ? `: ${log}` : ""}`,
         exitCode: EXIT.ERROR,
       });
     }
-    try {
-      const res = await fetch(`http://127.0.0.1:${healthPort}/readyz`, { signal: AbortSignal.timeout(1000) });
-      if (res.ok) return;
-    } catch {
-      // not listening yet
+    if (healthySince === undefined) {
+      try {
+        const res = await fetch(`http://127.0.0.1:${healthPort}/readyz`, { signal: AbortSignal.timeout(1000) });
+        if (res.ok) healthySince = Date.now();
+      } catch {
+        // not listening yet
+      }
+    }
+    if (healthySince !== undefined) {
+      const held = loopbackListeners(pid);
+      if (held === null) {
+        throw new ZopsError({
+          code: "tunnelFailed",
+          message: "cannot verify which process holds the tunnel's ports",
+          exitCode: EXIT.ERROR,
+          hint: "zops needs lsof (or /proc on Linux) to confirm the forwards belong to wireproxy.",
+        });
+      }
+      missing = [...ports, healthPort].filter((p) => !held.has(p));
+      if (missing.length === 0) return;
+      // Bound right after the health endpoint; a port still missing after that is held elsewhere.
+      if (Date.now() - healthySince > 3_000) break;
     }
     await Bun.sleep(150);
   }
-  throw new ZopsError({ code: "tunnelFailed", message: "wireproxy did not become ready in time", exitCode: EXIT.TIMEOUT });
+  if (healthySince === undefined) {
+    const log = wp.log();
+    throw new ZopsError({
+      code: "tunnelFailed",
+      message: `the tunnel did not come up within ${Math.round(timeoutMs / 1000)}s${log ? `: ${log}` : ""}`,
+      exitCode: EXIT.TIMEOUT,
+      hint: "The project's network did not answer through WireGuard. Check that the token may use the project, and outbound UDP is allowed.",
+    });
+  }
+  throw new ZopsError({
+    code: "tunnelFailed",
+    message: `127.0.0.1:${missing.join(", 127.0.0.1:")} is not held by wireproxy; another process may be listening there`,
+    exitCode: EXIT.ERROR,
+    hint: "Pick another local port (service:port:local-port) or find the process with `lsof -iTCP -sTCP:LISTEN`.",
+  });
 }
+
+const tunnelFailed = (message: string) => new ZopsError({ code: "tunnelFailed", message, exitCode: EXIT.ERROR });
+
+// --- command ----------------------------------------------------------------------------------
 
 export const tunnelCommands: CommandSpec[] = [
   {
@@ -139,15 +382,20 @@ wireproxy runs WireGuard on its own network stack and listens on 127.0.0.1 only 
 you name. No interface, route or DNS setting on this machine changes, so no sudo is needed and a
 running \`zcli vpn\` is unaffected.
 
-Each run registers a fresh WireGuard key with the project and deletes it again on exit. The private
-key exists only in memory and in a 0600 file in a private temp directory, removed as soon as
-wireproxy has read it. A run that was killed leaves its key in ${STATE_FILE} (public key only),
-and the next tunnel to the same project deletes it.
+Each run registers a fresh WireGuard key with the project and deletes it again on exit, also when
+interrupted. The private key is handed to wireproxy on stdin and never written to disk. The tunnel
+counts as up once the project's resolver answers through it and every forward is held by
+wireproxy itself; that waits up to 30s, or --timeout if shorter.
 
 With a command after \`--\`, zops runs it once the tunnel is up and exits with its status. In the
 command, {port} is replaced by the first tunnel's local port, also exported as ZOPS_TUNNEL_PORT
-(and ZOPS_TUNNEL_HOST=127.0.0.1). Without a command, zops prints the local addresses and holds
-the tunnel until it is interrupted or --ttl runs out.
+(and ZOPS_TUNNEL_HOST=127.0.0.1). Ctrl-C goes to the command, not the tunnel. Without a command,
+zops prints the local addresses and holds the tunnel until it is interrupted (exit 128+signal) or
+--ttl runs out (exit 0).
+
+A zops killed with SIGKILL cannot clean up: its key stays recorded in ${STATE_DIR}
+(public key and pids only), and the next tunnel to the same project deletes it and stops the
+orphaned wireproxy.
 
 Reaching the network is not the same as logging in: database credentials still come from the
 service's environment (\`zops env\`). Requires wireproxy (https://github.com/windtf/wireproxy) and a
@@ -188,6 +436,7 @@ token with at least the BASIC_USER role in the project.`,
       if (new Set(locals).size !== locals.length) throw usage("two targets ask for the same local port");
       const command = parsed.rest;
       const ttlMs = parseDuration(ctx.flag<string>("ttl") ?? "1h");
+      const readyMs = Math.min(ctx.timeoutMs, 30_000);
       const wireproxy = findWireproxy(ctx.flag<string>("wireproxy"));
 
       const project = await ctx.project();
@@ -204,41 +453,45 @@ token with at least the BASIC_USER role in the project.`,
         };
       }
 
-      const swept = await sweepStale(ctx, project.id);
-      if (swept) ctx.out.info(`removed ${swept} key(s) left behind by an earlier tunnel`);
-
-      for (const t of targets) if (!t.localPort) t.localPort = await freePort();
-      const healthPort = await freePort();
-
-      const keys = generateKeyPair();
-      const setup = await ctx.api.call<VpnSetup>("CreateProjectVpn", {
-        path: { id: project.id },
-        body: { publicKey: keys.publicKey },
-      });
-      writeState([
-        ...readState(),
-        { projectId: project.id, publicKey: keys.publicKey, pid: process.pid, startedAt: new Date().toISOString() },
-      ]);
-
-      const dir = mkdtempSync(join(tmpdir(), "zops-tunnel-"));
-      let proc: Bun.Subprocess<"ignore", "pipe", "pipe"> | undefined;
-      const stopSignals: (() => void)[] = [];
+      const signals = watchSignals();
+      let keys: KeyPair | undefined;
+      let registered = false;
+      let wp: Wireproxy | undefined;
       try {
-        const configPath = join(dir, "wireproxy.conf");
-        writeFileSync(configPath, wireproxyConfig(keys.privateKey, setup, targets), { mode: 0o600 });
-        proc = Bun.spawn([wireproxy, "-c", configPath, "-s", "-i", `127.0.0.1:${healthPort}`], {
-          stdin: "ignore",
-          stdout: "pipe",
-          stderr: "pipe",
+        const swept = await sweepStale(ctx, project.id);
+        if (swept) ctx.out.info(`removed ${swept} key(s) left behind by an earlier tunnel`);
+        signals.check();
+
+        for (const t of targets) if (!t.localPort) t.localPort = await freePort();
+        const healthPort = await freePort();
+
+        keys = generateKeyPair();
+        const record: TunnelRecord = {
+          projectId: project.id,
+          publicKey: keys.publicKey,
+          pid: process.pid,
+          pidStarted: processStart(process.pid),
+          startedAt: new Date().toISOString(),
+        };
+        // Recorded before the request: if zops dies while it is in flight, the key may exist.
+        saveRecord(record);
+        const setup = await ctx.api.call<VpnSetup>("CreateProjectVpn", {
+          path: { id: project.id },
+          body: { publicKey: keys.publicKey },
         });
-        const wireproxyPid = proc.pid;
-        writeState(readState().map((r) => (r.publicKey === keys.publicKey ? { ...r, wireproxyPid } : r)));
+        registered = true;
+        signals.check();
 
-        await waitReady(proc, healthPort, 30_000);
-        // wireproxy has parsed the file; the private key now lives only in its memory.
-        rmSync(dir, { recursive: true, force: true });
+        wp = startWireproxy(wireproxy, wireproxyConfig(keys.privateKey, setup, targets), healthPort);
+        ctx.out.debug(`wireproxy started (pid ${wp.proc.pid}), waiting for the tunnel`);
+        const readySince = Date.now();
+        if (wp.proc.pid !== undefined) {
+          saveRecord({ ...record, wireproxyPid: wp.proc.pid, wireproxyStarted: processStart(wp.proc.pid) });
+        }
+        await waitReady(wp, healthPort, targets.map((t) => t.localPort), readyMs, signals.signal);
+        ctx.out.debug(`tunnel up after ${Date.now() - readySince}ms`);
 
-        const tunnels = targets.map((t: TunnelTarget) => ({
+        const tunnels = targets.map((t) => ({
           service: t.service,
           port: t.port,
           host: "127.0.0.1",
@@ -246,16 +499,7 @@ token with at least the BASIC_USER role in the project.`,
           local: `127.0.0.1:${t.localPort}`,
         }));
         for (const t of tunnels) ctx.out.step(`${t.service}:${t.port} → ${t.local}`);
-
-        // A signal must reach the teardown below, not end zops with the key still registered.
-        const interrupted = new Promise<string>((resolve) => {
-          for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
-            const handler = () => resolve(sig);
-            process.on(sig, handler);
-            stopSignals.push(() => process.off(sig, handler));
-          }
-        });
-        const wireproxyExited = proc.exited.then(() => "wireproxy exited");
+        const wireproxyExited = wp.exited.then(() => "wireproxy" as const);
 
         if (command.length) {
           const first = String(targets[0]!.localPort);
@@ -266,47 +510,53 @@ token with at least the BASIC_USER role in the project.`,
               env: { ...process.env, ZOPS_TUNNEL_HOST: "127.0.0.1", ZOPS_TUNNEL_PORT: first },
             },
           );
-          const outcome = await Promise.race([child.exited.then(() => "done"), interrupted, wireproxyExited]);
-          if (outcome === "SIGINT" || outcome === "SIGTERM" || outcome === "SIGHUP") {
-            // A terminal Ctrl-C reaches the child too; a signal sent to zops alone is passed on.
-            if (child.exitCode === null) child.kill(outcome);
-            await child.exited;
-            ctx.exitCode = child.exitCode ?? 130;
-            return undefined;
-          }
-          if (outcome !== "done") {
+          // A terminal Ctrl-C already reached the command (psql cancels a query and goes on);
+          // termination signals sent to zops alone are passed on.
+          signals.route((sig) => {
+            if (sig !== "SIGINT") child.kill(sig);
+          });
+          const outcome = await Promise.race([child.exited.then(() => "done" as const), wireproxyExited]);
+          if (outcome === "wireproxy") {
             child.kill();
             await child.exited;
-            throw new ZopsError({ code: "tunnelFailed", message: "the tunnel closed while the command was running", exitCode: EXIT.ERROR });
+            throw tunnelFailed(`the tunnel closed while the command was running${wp.log() ? `: ${wp.log()}` : ""}`);
           }
-          ctx.exitCode = child.exitCode ?? 1;
+          ctx.exitCode = child.signalCode ? signalExit(child.signalCode) : (child.exitCode ?? 1);
           return undefined;
         }
 
         ctx.out.data({ project: project.name, tunnels, ttl: ttlMs ? ctx.flag<string>("ttl") : null });
-        const expired = ttlMs ? Bun.sleep(ttlMs).then(() => "ttl") : new Promise<string>(() => {});
-        const reason = await Promise.race([interrupted, wireproxyExited, expired]);
-        ctx.out.info(`closing the tunnel (${reason})`);
-        if (reason === "wireproxy exited") {
-          throw new ZopsError({ code: "tunnelFailed", message: "wireproxy exited unexpectedly", exitCode: EXIT.ERROR });
-        }
+        const ttl = ttlMs ? delay(ttlMs) : undefined;
+        const expired = ttl ? ttl.done.then(() => "ttl" as const) : new Promise<never>(() => {});
+        const reason = await Promise.race([signals.interrupted, wireproxyExited, expired]);
+        ttl?.cancel();
+        if (reason instanceof Interrupted) throw reason;
+        if (reason === "wireproxy") throw tunnelFailed(`wireproxy exited unexpectedly${wp.log() ? `: ${wp.log()}` : ""}`);
+        ctx.out.info("closing the tunnel (--ttl reached)");
+        return undefined;
+      } catch (err) {
+        if (!(err instanceof Interrupted)) throw err;
+        ctx.out.info(`closing the tunnel (${err.signal})`);
+        ctx.exitCode = signalExit(err.signal);
         return undefined;
       } finally {
-        for (const off of stopSignals) off();
-        if (proc && proc.exitCode === null) {
-          proc.kill("SIGTERM");
-          await proc.exited;
+        // A second Ctrl-C must not cut the teardown short and leave the key registered.
+        signals.route(() => {});
+        const stopSince = Date.now();
+        await stopWireproxy(wp);
+        if (wp) ctx.out.debug(`wireproxy stopped after ${Date.now() - stopSince}ms`);
+        if (keys) {
+          try {
+            if (registered) await deleteKey(ctx, project.id, keys.publicKey);
+            dropRecord(keys.publicKey);
+          } catch (err) {
+            ctx.out.warn(
+              `could not delete the tunnel's VPN key (${err instanceof Error ? err.message : String(err)}); ` +
+                "the next `zops tunnel` to this project retries",
+            );
+          }
         }
-        rmSync(dir, { recursive: true, force: true });
-        try {
-          await deleteKey(ctx, project.id, keys.publicKey);
-          writeState(readState().filter((r) => r.publicKey !== keys.publicKey));
-        } catch (err) {
-          ctx.out.warn(
-            `could not delete the tunnel's VPN key (${err instanceof Error ? err.message : String(err)}); ` +
-              "the next `zops tunnel` to this project retries",
-          );
-        }
+        signals.dispose();
       }
     },
   },

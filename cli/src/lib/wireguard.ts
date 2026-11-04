@@ -80,20 +80,23 @@ export function parseTarget(spec: string): TunnelTarget {
   return target;
 }
 
-/** A CIDR in canonical network form: `10.14.124.1/22` -> `10.14.124.0/22`. IPv6 is passed through. */
-function networkOf(cidr: string): string {
-  const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)\/(\d+)$/.exec(cidr);
-  if (!m) return cidr;
-  const bits = Number(m[5]);
-  const ip = m.slice(1, 5).reduce((acc, octet) => acc * 256 + Number(octet), 0);
-  const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
-  const net = (ip & mask) >>> 0;
-  return `${[24, 16, 8, 0].map((s) => (net >>> s) & 255).join(".")}/${bits}`;
+/**
+ * Values from the API go into an INI file; anything beyond address, key and host characters
+ * (a newline, a bracket) could add a section, so it is refused rather than escaped.
+ */
+const INI_SAFE = /^[A-Za-z0-9.:/+=_-]+$/;
+function safe(value: string, what: string): string {
+  if (!INI_SAFE.test(value)) throw new Error(`unexpected characters in the VPN setup's ${what}`);
+  return value;
 }
 
 /**
  * wireproxy's INI configuration. Targets use the `.zerops` suffix: the project resolver answers
  * it, and wireproxy has no search domain to turn a bare `db` into `db.zerops`.
+ *
+ * CheckAlive pings the project's resolver through the tunnel, and wireproxy's /readyz stays
+ * unhealthy until a ping comes back. Without it /readyz is healthy as soon as the process runs,
+ * handshake or not.
  */
 export function wireproxyConfig(
   privateKey: string,
@@ -103,29 +106,31 @@ export function wireproxyConfig(
 ): string {
   const { project, peer } = setup;
   const addresses = [
-    peer.ipv4?.assignedIpAddress && `${peer.ipv4.assignedIpAddress}/32`,
-    peer.ipv6?.assignedIpAddress && `${peer.ipv6.assignedIpAddress}/128`,
+    peer.ipv4?.assignedIpAddress && `${safe(peer.ipv4.assignedIpAddress, "address")}/32`,
+    peer.ipv6?.assignedIpAddress && `${safe(peer.ipv6.assignedIpAddress, "address")}/128`,
   ].filter(Boolean);
   const allowed = [project.ipv4?.network?.network, project.ipv6?.network?.network, peer.ipv4?.network?.network, peer.ipv6?.network?.network]
     .filter((n): n is string => Boolean(n))
-    .map(networkOf);
-  const dns = project.ipv4?.network?.gateway ?? project.ipv6?.network?.gateway;
+    .map((n) => safe(n, "network"));
+  const resolver = project.ipv4?.network?.gateway ?? project.ipv6?.network?.gateway;
   const endpoint = project.ipv4?.sharedEndpoint ?? project.ipv6?.sharedEndpoint;
-  if (!addresses.length || !allowed.length || !dns || !endpoint) {
+  if (!addresses.length || !allowed.length || !resolver || !endpoint) {
     throw new Error("the VPN setup from the API is incomplete (no address, network, resolver or endpoint)");
   }
 
   const lines = [
     "[Interface]",
-    `PrivateKey = ${privateKey}`,
+    `PrivateKey = ${safe(privateKey, "private key")}`,
     `Address = ${addresses.join(", ")}`,
-    `DNS = ${dns}`,
+    `DNS = ${safe(resolver, "resolver")}`,
     `MTU = ${options.mtu ?? 1420}`,
+    `CheckAlive = ${resolver}`,
+    "CheckAliveInterval = 1",
     "",
     "[Peer]",
-    `PublicKey = ${project.publicKey}`,
+    `PublicKey = ${safe(project.publicKey, "public key")}`,
     `AllowedIPs = ${allowed.join(", ")}`,
-    `Endpoint = ${endpoint}`,
+    `Endpoint = ${safe(endpoint, "endpoint")}`,
     "PersistentKeepalive = 25",
   ];
   for (const t of targets) {
