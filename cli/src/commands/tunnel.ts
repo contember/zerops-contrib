@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, constants as fsConstants, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { constants as osConstants } from "node:os";
 import { dirname, join } from "node:path";
@@ -8,6 +8,7 @@ import type { Context } from "../lib/context.ts";
 import type { CommandSpec } from "../lib/spec.ts";
 import { userConfigPath } from "../lib/config.ts";
 import { EXIT, ZopsError, usage } from "../lib/errors.ts";
+import { shutdown } from "../lib/shutdown.ts";
 import { parseDuration } from "../lib/spec.ts";
 import { generateKeyPair, parseTarget, wireproxyConfig, type KeyPair, type VpnSetup } from "../lib/wireguard.ts";
 
@@ -78,7 +79,13 @@ function alive(pid: number): boolean {
 /** When `pid` started, as `ps` reports it; null if it is not running or ps cannot tell. */
 function processStart(pid: number): string | null {
   if (!alive(pid)) return null;
-  const ps = Bun.spawnSync(["ps", "-o", "lstart=", "-p", String(pid)], { stdout: "pipe", stderr: "ignore" });
+  // lstart is local, localised time: pinned, or a tunnel started under another TZ or locale would
+  // read every live record as stale and delete its key.
+  const ps = Bun.spawnSync(["ps", "-o", "lstart=", "-p", String(pid)], {
+    stdout: "pipe",
+    stderr: "ignore",
+    env: { PATH: process.env.PATH ?? "/usr/bin:/bin", LC_ALL: "C", TZ: "UTC" },
+  });
   return ps.stdout.toString().trim() || null;
 }
 
@@ -122,12 +129,15 @@ const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 type Sig = (typeof SIGNALS)[number];
 
 class Interrupted extends Error {
-  constructor(readonly signal: Sig) {
-    super(`interrupted by ${signal}`);
+  /** A signal, or EPIPE when whoever read our stdout went away. */
+  constructor(readonly signal: Sig | "EPIPE") {
+    super(signal === "EPIPE" ? "stdout was closed" : `interrupted by ${signal}`);
   }
 }
 
-const signalExit = (sig: string) => 128 + ((osConstants.signals as Record<string, number>)[sig] ?? 1);
+/** 128 + signal number, as a shell reports it; a closed stdout is the normal end of a pipe, 0. */
+const signalExit = (sig: string) =>
+  sig === "EPIPE" ? 0 : 128 + ((osConstants.signals as Record<string, number>)[sig] ?? 1);
 
 /**
  * Installed before the key is registered, so a signal at any point reaches the teardown instead
@@ -142,6 +152,7 @@ function watchSignals() {
     process.on(sig, handler);
     return [sig, handler] as const;
   });
+  shutdown.onBrokenPipe = () => controller.abort(new Interrupted("EPIPE"));
   return {
     signal: controller.signal,
     interrupted: new Promise<Interrupted>((resolve) =>
@@ -155,6 +166,7 @@ function watchSignals() {
     },
     dispose() {
       for (const [sig, handler] of handlers) process.off(sig, handler);
+      shutdown.onBrokenPipe = undefined;
     },
   };
 }
@@ -184,8 +196,26 @@ async function freePort(): Promise<number> {
   });
 }
 
+/** The wireproxy binary, checked up front so a bad path fails before a key is registered. */
 function findWireproxy(explicit: string | undefined): string {
   const found = explicit ?? Bun.which("wireproxy");
+  if (found && explicit) {
+    let problem: string | undefined;
+    try {
+      if (!statSync(found).isFile()) problem = "is not a file";
+      else accessSync(found, fsConstants.X_OK);
+    } catch (err) {
+      problem = (err as NodeJS.ErrnoException).code === "ENOENT" ? "does not exist" : "is not executable";
+    }
+    if (problem) {
+      throw new ZopsError({
+        code: "dependencyMissing",
+        message: `wireproxy at ${found} ${problem}`,
+        exitCode: EXIT.ERROR,
+        hint: "Point --wireproxy / ZOPS_WIREPROXY at the binary from https://github.com/windtf/wireproxy/releases.",
+      });
+    }
+  }
   if (!found) {
     throw new ZopsError({
       code: "dependencyMissing",
@@ -200,6 +230,8 @@ function findWireproxy(explicit: string | undefined): string {
 interface Wireproxy {
   proc: ChildProcess;
   exited: Promise<void>;
+  /** It exited, was killed, or never started (spawnError sets no exit code). */
+  gone(): boolean;
   /** Its stderr, trimmed for quoting: health-probe noise dropped, anything key-shaped redacted. */
   log(): string;
 }
@@ -215,14 +247,24 @@ function startWireproxy(binary: string, config: string, healthPort: number): Wir
     stdio: ["pipe", "ignore", "pipe"],
   });
   let stderr = "";
+  let truncated = false;
   proc.stderr!.on("data", (chunk: Buffer) => {
-    stderr = (stderr + chunk.toString()).slice(-8000);
+    stderr += chunk.toString();
+    if (stderr.length > 8000) {
+      stderr = stderr.slice(-8000);
+      truncated = true;
+    }
   });
   let spawnError: Error | undefined;
+  let gone = false;
   const exited = new Promise<void>((resolve) => {
-    proc.once("exit", () => resolve());
+    proc.once("exit", () => {
+      gone = true;
+      resolve();
+    });
     proc.once("error", (err) => {
       spawnError = err;
+      gone = true;
       resolve();
     });
   });
@@ -231,20 +273,28 @@ function startWireproxy(binary: string, config: string, healthPort: number): Wir
   return {
     proc,
     exited,
+    gone: () => gone,
     log() {
-      const text = stderr
-        .split("\n")
-        .filter((l) => l.trim() && !l.includes("Health metric request"))
-        .join("\n")
-        .replace(/[A-Za-z0-9+/]{42,43}=/g, "[redacted]")
-        .trim();
-      return (spawnError ? `${spawnError.message}\n${text}` : text).trim().slice(-500);
+      // Whole lines only, the last few distinct ones, timestamps aside; health probes dropped,
+      // anything key-shaped redacted.
+      const lines = stderr.split("\n").slice(truncated ? 1 : 0);
+      const seen = new Set<string>();
+      const kept: string[] = [];
+      for (const line of lines.reverse()) {
+        const text = line.replace(/^(ERROR: )?\d{4}\/\d\d\/\d\d \d\d:\d\d:\d\d /, "$1").trim();
+        if (!text || text.includes("Health metric request") || seen.has(text)) continue;
+        seen.add(text);
+        kept.unshift(text.replace(/[A-Za-z0-9+/]{42,43}=/g, "[redacted]"));
+        if (kept.length === 4) break;
+      }
+      if (spawnError) kept.unshift(spawnError.message);
+      return kept.join("; ");
     },
   };
 }
 
 async function stopWireproxy(wp: Wireproxy | undefined): Promise<void> {
-  if (!wp || wp.proc.exitCode !== null || wp.proc.signalCode !== null || wp.proc.pid === undefined) return;
+  if (!wp || wp.gone() || wp.proc.pid === undefined) return;
   wp.proc.kill("SIGTERM");
   const grace = delay(3000);
   const stopped = await Promise.race([wp.exited.then(() => true), grace.done.then(() => false)]);
@@ -318,7 +368,7 @@ async function waitReady(
   let missing: number[] = [];
   while (Date.now() < deadline) {
     if (abort.aborted) throw abort.reason;
-    if (wp.proc.exitCode !== null || wp.proc.signalCode !== null) {
+    if (wp.gone()) {
       await wp.exited;
       const log = wp.log();
       throw new ZopsError({
@@ -389,7 +439,8 @@ wireproxy itself; that waits up to 30s, or --timeout if shorter.
 
 With a command after \`--\`, zops runs it once the tunnel is up and exits with its status. In the
 command, {port} is replaced by the first tunnel's local port, also exported as ZOPS_TUNNEL_PORT
-(and ZOPS_TUNNEL_HOST=127.0.0.1). Ctrl-C goes to the command, not the tunnel. Without a command,
+(and ZOPS_TUNNEL_HOST=127.0.0.1). A terminal Ctrl-C goes to the command, not the tunnel; SIGTERM
+and SIGHUP sent to zops are passed on, and SIGINT too when stdin is not a terminal. Without a command,
 zops prints the local addresses and holds the tunnel until it is interrupted (exit 128+signal) or
 --ttl runs out (exit 0).
 
@@ -475,10 +526,19 @@ token with at least the BASIC_USER role in the project.`,
         };
         // Recorded before the request: if zops dies while it is in flight, the key may exist.
         saveRecord(record);
-        const setup = await ctx.api.call<VpnSetup>("CreateProjectVpn", {
-          path: { id: project.id },
-          body: { publicKey: keys.publicKey },
-        });
+        let setup: VpnSetup;
+        try {
+          setup = await ctx.api.call<VpnSetup>("CreateProjectVpn", {
+            path: { id: project.id },
+            body: { publicKey: keys.publicKey },
+          });
+        } catch (err) {
+          // A clear 4xx means the key was refused. A 5xx or a dropped connection may have come
+          // after the server stored it, so the teardown deletes it to be sure (404 is fine).
+          const refused = err instanceof ZopsError && err.exitCode !== EXIT.TRANSIENT;
+          if (!refused) registered = true;
+          throw err;
+        }
         registered = true;
         signals.check();
 
@@ -510,10 +570,12 @@ token with at least the BASIC_USER role in the project.`,
               env: { ...process.env, ZOPS_TUNNEL_HOST: "127.0.0.1", ZOPS_TUNNEL_PORT: first },
             },
           );
-          // A terminal Ctrl-C already reached the command (psql cancels a query and goes on);
-          // termination signals sent to zops alone are passed on.
+          // A terminal Ctrl-C already reached the command (psql cancels a query and goes on), so
+          // SIGINT is passed on only without a terminal, where a parent process sent it to zops
+          // alone (`timeout -s INT`, child.kill("SIGINT")). Termination signals always are.
+          const interactive = Boolean(process.stdin.isTTY);
           signals.route((sig) => {
-            if (sig !== "SIGINT") child.kill(sig);
+            if (sig !== "SIGINT" || !interactive) child.kill(sig);
           });
           const outcome = await Promise.race([child.exited.then(() => "done" as const), wireproxyExited]);
           if (outcome === "wireproxy") {
@@ -547,7 +609,13 @@ token with at least the BASIC_USER role in the project.`,
         if (wp) ctx.out.debug(`wireproxy stopped after ${Date.now() - stopSince}ms`);
         if (keys) {
           try {
-            if (registered) await deleteKey(ctx, project.id, keys.publicKey);
+            if (registered) {
+              try {
+                await deleteKey(ctx, project.id, keys.publicKey);
+              } catch (err) {
+                if (!(err instanceof ZopsError && err.exitCode === EXIT.NOT_FOUND)) throw err;
+              }
+            }
             dropRecord(keys.publicKey);
           } catch (err) {
             ctx.out.warn(

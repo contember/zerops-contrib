@@ -1,9 +1,15 @@
 #!/usr/bin/env bun
 import { run } from "./cli.ts";
+import { shutdown } from "./lib/shutdown.ts";
 
-// Piping into `head` closes stdout early; that is normal usage, not a crash.
+// Piping into `head` closes stdout early; that is normal usage, not a crash. A command with
+// something to clean up (an open tunnel) is told instead, and exits once it has.
 process.stdout.on("error", (err: NodeJS.ErrnoException) => {
-  if (err.code === "EPIPE") process.exit(0);
+  if (err.code === "EPIPE") {
+    if (shutdown.onBrokenPipe) shutdown.onBrokenPipe();
+    else process.exit(0);
+    return;
+  }
   throw err;
 });
 

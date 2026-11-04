@@ -29,6 +29,8 @@ let home: string;
 let report: string;
 const created: string[] = [];
 const deleted: string[] = [];
+/** Makes the stand-in API answer CreateProjectVpn with this status, after storing the key. */
+let createStatus = 200;
 
 beforeAll(() => {
   server = Bun.serve({
@@ -51,6 +53,7 @@ beforeAll(() => {
         const { publicKey } = (await req.json()) as { publicKey: string };
         if (req.method === "POST") {
           created.push(publicKey);
+          if (createStatus !== 200) return Response.json({ error: { code: "internal", message: "boom" } }, { status: createStatus });
           return Response.json(SETUP);
         }
         if (req.method === "DELETE") {
@@ -70,6 +73,7 @@ beforeEach(() => {
   report = join(home, "report.json");
   created.length = 0;
   deleted.length = 0;
+  createStatus = 200;
 });
 
 afterEach(() => rmSync(home, { recursive: true, force: true }));
@@ -203,8 +207,12 @@ describe("zops tunnel", () => {
 
   test("deletes keys and stops wireproxies that killed runs left behind, in this project only", async () => {
     mkdirSync(stateDir(), { recursive: true });
+    // As zops records it: pinned to UTC and the C locale.
     const lstart = (pid: number) =>
-      Bun.spawnSync(["ps", "-o", "lstart=", "-p", String(pid)], { stdout: "pipe" }).stdout.toString().trim();
+      Bun.spawnSync(["ps", "-o", "lstart=", "-p", String(pid)], {
+        stdout: "pipe",
+        env: { PATH: process.env.PATH!, LC_ALL: "C", TZ: "UTC" },
+      }).stdout.toString().trim();
     // A dead zops whose wireproxy is still running.
     const orphan = Bun.spawn(["sleep", "30"]);
     const dead = { projectId: PROJECT_ID, publicKey: "dead-key", pid: 2 ** 22 + 1, pidStarted: null, wireproxyPid: orphan.pid, wireproxyStarted: lstart(orphan.pid), startedAt: "2026-11-04T00:00:00Z" };
@@ -299,6 +307,97 @@ describe("zops tunnel", () => {
     expect(new Set(created).size).toBe(6);
     expect([...deleted].sort()).toEqual([...created].sort());
     expect(records()).toEqual([]);
+  });
+
+  test("a tunnel started under another TZ or locale leaves a live tunnel's key alone", async () => {
+    const held = Bun.spawn([process.execPath, join(import.meta.dir, "..", "index.ts"), "tunnel", "db:5432", "-P", PROJECT_ID, "--ttl", "1m"], {
+      stdout: "pipe",
+      stderr: "pipe",
+      env: env({ TZ: "America/Los_Angeles", LC_ALL: "en_US.UTF-8" }),
+    });
+    try {
+      let stderr = "";
+      void (async () => {
+        for await (const chunk of held.stderr) stderr += new TextDecoder().decode(chunk);
+      })();
+      await until(() => stderr.includes("→"));
+      const heldKey = created[0]!;
+      const other = await run(["tunnel", "db:5432", "-P", PROJECT_ID, "--", "true"], { TZ: "Asia/Tokyo", LC_ALL: "C" });
+      expect(other.exitCode).toBe(0);
+      expect(other.stderr).not.toContain("left behind");
+      expect(deleted).not.toContain(heldKey);
+      held.kill("SIGINT");
+      expect(await held.exited).toBe(130);
+      expect(deleted).toContain(heldKey);
+    } finally {
+      held.kill("SIGKILL");
+    }
+  });
+
+  test("a 5xx on registration still deletes the key, which the server may have stored", async () => {
+    createStatus = 502;
+    const { exitCode } = await run(["tunnel", "db:5432", "-P", PROJECT_ID, "--", "true"]);
+    expect(exitCode).toBe(6);
+    expect(new Set(created).size).toBe(1);
+    expect(deleted).toEqual([created[0]!]);
+    expect(records()).toEqual([]);
+  });
+
+  test("a clear refusal of the key needs no delete", async () => {
+    createStatus = 403;
+    const { exitCode } = await run(["tunnel", "db:5432", "-P", PROJECT_ID, "--", "true"]);
+    expect(exitCode).toBe(3);
+    expect(deleted).toEqual([]);
+    expect(records()).toEqual([]);
+  });
+
+  test("a wireproxy path that does not exist or is not executable fails before registering", async () => {
+    const missing = await run(["tunnel", "db:5432", "-P", PROJECT_ID, "--", "true"], { ZOPS_WIREPROXY: "/nonexistent/wireproxy" });
+    expect(missing.exitCode).toBe(1);
+    expect(missing.stderr).toContain("/nonexistent/wireproxy does not exist");
+    const plain = join(home, "not-executable");
+    writeFileSync(plain, "#!/bin/sh\n", { mode: 0o644 });
+    const notExec = await run(["tunnel", "db:5432", "-P", PROJECT_ID, "--", "true"], { ZOPS_WIREPROXY: plain });
+    expect(notExec.exitCode).toBe(1);
+    expect(notExec.stderr).toContain("is not executable");
+    expect(created).toEqual([]);
+  });
+
+  test("a closed stdout ends a held tunnel through its teardown", async () => {
+    const child = spawn(process.execPath, [join(import.meta.dir, "..", "index.ts"), "tunnel", "db:5432", "-P", PROJECT_ID, "--ttl", "1m", "--json"], {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: env(),
+    });
+    // Whoever reads the addresses goes away before they are written, like `| true`.
+    child.stdout!.destroy();
+    const code = await new Promise<number | null>((resolve) => child.once("exit", (c) => resolve(c)));
+    expect(code).toBe(0);
+    expect(created).toHaveLength(1);
+    expect(deleted).toEqual(created);
+    expect(records()).toEqual([]);
+  });
+
+  test("without a terminal, SIGINT sent to zops alone reaches the command", async () => {
+    const proc = Bun.spawn([process.execPath, join(import.meta.dir, "..", "index.ts"), "tunnel", "db:5432", "-P", PROJECT_ID, "--", "sleep", "30"], {
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      env: env(),
+    });
+    try {
+      let stderr = "";
+      void (async () => {
+        for await (const chunk of proc.stderr) stderr += new TextDecoder().decode(chunk);
+      })();
+      await until(() => stderr.includes("→"));
+      const started = Date.now();
+      proc.kill("SIGINT");
+      expect(await proc.exited).toBe(130);
+      expect(Date.now() - started).toBeLessThan(2500);
+      expect(deleted).toEqual(created);
+    } finally {
+      proc.kill("SIGKILL");
+    }
   });
 
   test("--json after -- does not switch zops's own errors to JSON", async () => {
