@@ -3,7 +3,8 @@ import type { CommandSpec } from "../lib/spec.ts";
 import { settleProcess } from "../lib/process.ts";
 import { EXIT, ZopsError, notFound, usage } from "../lib/errors.ts";
 import { esFilter } from "../lib/extra-operations.ts";
-import type { ProjectSummary } from "../lib/context.ts";
+import type { Context, ProjectSummary } from "../lib/context.ts";
+import { SENSITIVE_FLAG, sensitiveForUpdate } from "./env.ts";
 
 const PROJECT_COLUMNS = [
   { key: "name", header: "NAME" },
@@ -484,19 +485,32 @@ For anything beyond one target group, pass a JSON file with --config-file holdin
   },
 ];
 
+interface ProjectEnv {
+  id: string;
+  key: string;
+  content: string;
+  sensitive?: boolean;
+  type?: string;
+}
+
+/**
+ * The project's own variables. GetProjectDetails carries no variables (`envVariables` exists only
+ * on the create-project request), so they come from GetProjectEnvList, minus the platform's SYSTEM
+ * entries (envIsolation, zeropsSubdomainHost, ...).
+ */
+async function listProjectEnv(ctx: Context, projectId: string): Promise<ProjectEnv[]> {
+  const res = await ctx.api.call<{ items?: ProjectEnv[] }>("GetProjectEnvList", { path: { id: projectId } });
+  return (res.items ?? []).filter((v) => v.type !== "SYSTEM");
+}
+
 export const projectEnvCommands: CommandSpec[] = [
   {
     path: ["project", "env", "list"],
     summary: "List project-level environment variables.",
     description: "Project variables are visible to every service. Service-scoped variables live under `zops env`.",
-    operations: ["GetProjectEnvFile"],
+    operations: ["GetProjectEnvList"],
     async run(ctx) {
-      const projectId = await ctx.projectId();
-      const project = await ctx.api.call<{ envVariables?: { id: string; key: string; content: string; sensitive?: boolean }[] }>(
-        "GetProjectDetails",
-        { path: { id: projectId } },
-      );
-      const vars = project.envVariables ?? [];
+      const vars = await listProjectEnv(ctx, await ctx.projectId());
       ctx.out.data(vars, {
         columns: [
           { key: "key", header: "KEY" },
@@ -515,19 +529,17 @@ export const projectEnvCommands: CommandSpec[] = [
       { name: "key", description: "Variable name.", required: true },
       { name: "value", description: "Value, or '-' to read from stdin.", required: true },
     ],
-    flags: [{ name: "sensitive", type: "boolean", description: "Store as a secret; the value is redacted on read." }],
+    flags: [SENSITIVE_FLAG],
     examples: ["zops project env set API_MODE production", "echo -n s3cr3t | zops project env set TOKEN - --sensitive"],
-    operations: ["CreateProjectEnv", "UpdateProjectEnv"],
+    operations: ["GetProjectEnvList", "CreateProjectEnv", "UpdateProjectEnv"],
     async run(ctx, parsed) {
       const key = parsed.args[0]!;
       const value = parsed.args[1] === "-" ? (await Bun.stdin.text()).replace(/\n$/, "") : parsed.args[1]!;
       const projectId = await ctx.projectId();
-      const sensitive = ctx.bool("sensitive");
-
-      const project = await ctx.api.call<{ envVariables?: { id: string; key: string }[] }>("GetProjectDetails", {
-        path: { id: projectId },
-      });
-      const existing = project.envVariables?.find((v) => v.key === key);
+      const existing = (await listProjectEnv(ctx, projectId)).find((v) => v.key === key);
+      const sensitive = existing
+        ? sensitiveForUpdate(ctx.flag<boolean>("sensitive"), existing.sensitive)
+        : ctx.bool("sensitive");
 
       if (ctx.dryRun) {
         return { dryRun: true, operation: existing ? "UpdateProjectEnv" : "CreateProjectEnv", key, sensitive };
@@ -536,7 +548,7 @@ export const projectEnvCommands: CommandSpec[] = [
       if (existing) {
         const proc = await ctx.api.call<{ id: string }>("UpdateProjectEnv", {
           path: { id: existing.id },
-          body: { content: value },
+          body: { key, content: value, sensitive },
         });
         ctx.out.data(await settleProcess(ctx, proc, `updating project variable ${key}`));
         return;
@@ -553,14 +565,10 @@ export const projectEnvCommands: CommandSpec[] = [
     summary: "Delete a project-level environment variable.",
     destructive: true,
     args: [{ name: "key", description: "Variable name.", required: true }],
-    operations: ["DeleteProjectEnv"],
+    operations: ["GetProjectEnvList", "DeleteProjectEnv"],
     async run(ctx, parsed) {
       const key = parsed.args[0]!;
-      const projectId = await ctx.projectId();
-      const project = await ctx.api.call<{ envVariables?: { id: string; key: string }[] }>("GetProjectDetails", {
-        path: { id: projectId },
-      });
-      const existing = project.envVariables?.find((v) => v.key === key);
+      const existing = (await listProjectEnv(ctx, await ctx.projectId())).find((v) => v.key === key);
       if (!existing) throw notFound(`project has no variable '${key}'`, "Run `zops project env list`.");
       await ctx.confirm(`delete project variable ${key}`);
       if (ctx.dryRun) return { dryRun: true, operation: "DeleteProjectEnv", key };

@@ -26,6 +26,22 @@ async function listUserData(ctx: import("../lib/context.ts").Context, serviceId:
   return res.items ?? res.list ?? [];
 }
 
+/**
+ * The `sensitive` an update sends. The API treats it as a full overwrite (left out means plain),
+ * so an update keeps what the variable already has unless --sensitive / --no-sensitive says
+ * otherwise. Without this, changing a secret's value quietly made it readable.
+ */
+export function sensitiveForUpdate(flag: boolean | undefined, current: boolean | undefined): boolean {
+  return flag ?? current ?? false;
+}
+
+export const SENSITIVE_FLAG = {
+  name: "sensitive",
+  type: "boolean" as const,
+  description:
+    "Store as a secret; the value is redacted on read. An update keeps the variable's current setting unless --sensitive or --no-sensitive is given.",
+};
+
 const RESTART_FLAG = {
   name: "restart",
   type: "boolean" as const,
@@ -133,10 +149,7 @@ connection strings, credentials) merged with the ones you defined.`,
       { name: "value", description: "Value, or '-' to read from stdin.", required: true },
       { name: "service", description: "Service hostname or id. Defaults to --service." },
     ],
-    flags: [
-      { name: "sensitive", type: "boolean", description: "Store as a secret; the value is redacted on read." },
-      RESTART_FLAG,
-    ],
+    flags: [SENSITIVE_FLAG, RESTART_FLAG],
     examples: [
       "zops env set LOG_LEVEL debug api",
       "echo -n s3cr3t | zops env set API_KEY - api --sensitive --restart",
@@ -147,6 +160,9 @@ connection strings, credentials) merged with the ones you defined.`,
       const value = parsed.args[1] === "-" ? (await Bun.stdin.text()).replace(/\n$/, "") : parsed.args[1]!;
       const service = await ctx.service(parsed.args[2]);
       const existing = (await listUserData(ctx, service.id)).find((v) => v.key === key);
+      const sensitive = existing
+        ? sensitiveForUpdate(ctx.flag<boolean>("sensitive"), existing.sensitive)
+        : ctx.bool("sensitive");
 
       if (ctx.dryRun) {
         return {
@@ -154,18 +170,18 @@ connection strings, credentials) merged with the ones you defined.`,
           operation: existing ? "UpdateUserDataById" : "CreateUserData",
           service: service.name,
           key,
-          sensitive: ctx.bool("sensitive"),
+          sensitive,
         };
       }
 
       const proc = existing
         ? await ctx.api.call<{ id: string }>("UpdateUserDataById", {
             path: { id: existing.id },
-            body: { key, content: value },
+            body: { key, content: value, sensitive },
           })
         : await ctx.api.call<{ id: string }>("CreateUserData", {
             path: { id: service.id },
-            body: { key, content: value, sensitive: ctx.bool("sensitive") },
+            body: { key, content: value, sensitive },
           });
 
       const result = await settleProcess(ctx, proc, `${existing ? "updating" : "creating"} ${key} on ${service.name}`);
