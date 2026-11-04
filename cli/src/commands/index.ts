@@ -19,6 +19,7 @@ import { miscCommands } from "./misc.ts";
 import { apiCommands } from "./api.ts";
 import { catalogCommands } from "./catalog.ts";
 import { applyCommands } from "./apply.ts";
+import { tunnelCommands } from "./tunnel.ts";
 
 export const COMMANDS: CommandSpec[] = [
   ...authCommands,
@@ -43,4 +44,5 @@ export const COMMANDS: CommandSpec[] = [
   ...miscCommands,
   ...apiCommands,
   ...catalogCommands,
+  ...tunnelCommands,
 ];

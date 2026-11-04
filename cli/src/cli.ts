@@ -184,14 +184,17 @@ export function renderRootHelp(): string {
 }
 
 export async function run(argv: string[]): Promise<number> {
-  const wantsVersion = argv.includes("--version");
+  // Anything after a bare `--` belongs to a wrapped command (`zops tunnel … -- psql --help`).
+  const dashDash = argv.indexOf("--");
+  const own = dashDash === -1 ? argv : argv.slice(0, dashDash);
+  const wantsVersion = own.includes("--version");
   if (wantsVersion) {
     process.stdout.write(`zops ${VERSION} (api spec ${SPEC_VERSION})\n`);
     return EXIT.OK;
   }
 
   const { command, consumed } = matchCommand(argv);
-  const wantsHelp = argv.includes("--help") || argv.includes("-h");
+  const wantsHelp = own.includes("--help") || own.includes("-h");
 
   if (!command) {
     const firstIndex = commandWordIndices(argv)[0];
@@ -243,7 +246,7 @@ export async function run(argv: string[]): Promise<number> {
     ctx = new Context(parsed);
     const result = await command.run(ctx, parsed);
     if (result !== undefined) ctx.out.data(result);
-    return EXIT.OK;
+    return ctx.exitCode ?? EXIT.OK;
   } catch (err) {
     const out = ctx?.out ?? new Output({ json: argv.includes("--json") });
     if (err instanceof ZopsError) {
