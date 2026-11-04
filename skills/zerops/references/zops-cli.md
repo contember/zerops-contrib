@@ -134,6 +134,8 @@ zops tunnel db:5432:15432 --ttl 30m --json   # hold open; prints the local addre
 - A tunnel without a command ends after `--ttl` (default 1h); stop it earlier with SIGINT or
   SIGTERM (exit 130/143) and zops still deletes its key. Only a SIGKILLed zops leaves its key
   behind, until the next `zops tunnel` to the same project removes it.
+- To stop a tunnel that runs a command, send SIGTERM. A SIGINT counts as Ctrl-C while zops is in
+  the terminal's foreground, and Ctrl-C belongs to the command.
 
 ## `zops apply` — the closest thing to declarative infrastructure
 
