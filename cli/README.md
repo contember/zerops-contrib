@@ -218,7 +218,8 @@ zops tunnel db:5432:15432 cache:6379 --ttl 30m --json
 - **Ctrl-C belongs to the command.** wireproxy runs in its own process group, so cancelling a
   query in `psql` does not take the tunnel down. SIGTERM and SIGHUP sent to zops are passed on to
   the command, and SIGINT too when zops is not in the terminal's foreground (a detached
-  supervisor, a background job, no terminal). In the foreground zops cannot tell a Ctrl-C from a
+  supervisor, no terminal, a background job signalled by its pid; `kill -INT %1` signals the
+  whole job, so the command gets it twice). In the foreground zops cannot tell a Ctrl-C from a
   script's `kill -INT`, so it treats every SIGINT as Ctrl-C: scripts should stop it with SIGTERM.
   A held tunnel whose reader is gone before the addresses are printed (`| true`) tears down and
   exits 0.
