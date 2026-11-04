@@ -196,9 +196,22 @@ async function freePort(): Promise<number> {
   });
 }
 
+/**
+ * Whether zops is in its controlling terminal's foreground process group, the group a terminal
+ * Ctrl-C is delivered to. stdin being a terminal says nothing about this: `zops … < file` in a
+ * terminal still gets the Ctrl-C, and so does the command in the same group.
+ */
+function inTerminalForeground(): boolean {
+  const ps = Bun.spawnSync(["ps", "-o", "tpgid=,pgid=", "-p", String(process.pid)], { env: { PATH: process.env.PATH ?? "" } });
+  const [tpgid, pgid] = ps.stdout.toString().trim().split(/\s+/).map(Number);
+  // No controlling terminal shows as 0 (macOS) or -1 (Linux).
+  return tpgid !== undefined && tpgid > 0 && tpgid === pgid;
+}
+
 /** The wireproxy binary, checked up front so a bad path fails before a key is registered. */
 function findWireproxy(explicit: string | undefined): string {
-  const found = explicit ?? Bun.which("wireproxy");
+  // A bare name (`ZOPS_WIREPROXY=wireproxy`) is looked up on PATH, as a shell would.
+  const found = explicit ? (explicit.includes("/") ? explicit : (Bun.which(explicit) ?? explicit)) : Bun.which("wireproxy");
   if (found && explicit) {
     let problem: string | undefined;
     try {
@@ -570,12 +583,13 @@ token with at least the BASIC_USER role in the project.`,
               env: { ...process.env, ZOPS_TUNNEL_HOST: "127.0.0.1", ZOPS_TUNNEL_PORT: first },
             },
           );
-          // A terminal Ctrl-C already reached the command (psql cancels a query and goes on), so
-          // SIGINT is passed on only without a terminal, where a parent process sent it to zops
-          // alone (`timeout -s INT`, child.kill("SIGINT")). Termination signals always are.
-          const interactive = Boolean(process.stdin.isTTY);
+          // A terminal Ctrl-C goes to the whole foreground group, so it already reached the
+          // command (psql cancels a query and goes on); passing it on would deliver it twice. SIGINT
+          // is forwarded only when zops is not in its terminal's foreground group, where a parent
+          // process sent it to zops alone (child.kill("SIGINT"), a background job). Termination
+          // signals always are.
           signals.route((sig) => {
-            if (sig !== "SIGINT" || !interactive) child.kill(sig);
+            if (sig !== "SIGINT" || !inTerminalForeground()) child.kill(sig);
           });
           const outcome = await Promise.race([child.exited.then(() => "done" as const), wireproxyExited]);
           if (outcome === "wireproxy") {

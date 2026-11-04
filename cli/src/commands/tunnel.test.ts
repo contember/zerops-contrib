@@ -377,27 +377,76 @@ describe("zops tunnel", () => {
     expect(records()).toEqual([]);
   });
 
-  test("without a terminal, SIGINT sent to zops alone reaches the command", async () => {
-    const proc = Bun.spawn([process.execPath, join(import.meta.dir, "..", "index.ts"), "tunnel", "db:5432", "-P", PROJECT_ID, "--", "sleep", "30"], {
-      stdin: "ignore",
-      stdout: "pipe",
-      stderr: "pipe",
+  test("SIGINT sent to zops alone, outside the terminal's foreground, reaches the command", async () => {
+    // Its own process group, so this holds when the tests themselves run in a terminal.
+    const child = spawn(process.execPath, [join(import.meta.dir, "..", "index.ts"), "tunnel", "db:5432", "-P", PROJECT_ID, "--", "sleep", "30"], {
+      detached: true,
+      stdio: ["ignore", "ignore", "pipe"],
       env: env(),
     });
     try {
       let stderr = "";
-      void (async () => {
-        for await (const chunk of proc.stderr) stderr += new TextDecoder().decode(chunk);
-      })();
+      child.stderr!.on("data", (d) => (stderr += d));
+      const exited = new Promise<number | null>((resolve) => child.once("exit", (code) => resolve(code)));
       await until(() => stderr.includes("→"));
       const started = Date.now();
-      proc.kill("SIGINT");
-      expect(await proc.exited).toBe(130);
+      child.kill("SIGINT");
+      expect(await exited).toBe(130);
       expect(Date.now() - started).toBeLessThan(2500);
       expect(deleted).toEqual(created);
     } finally {
-      proc.kill("SIGKILL");
+      try {
+        process.kill(-child.pid!, "SIGKILL");
+      } catch {}
     }
+  });
+
+  test.skipIf(!Bun.which("script"))("a terminal Ctrl-C reaches the command once, also with stdin redirected", async () => {
+    // Under a pseudo-terminal zops is in the foreground group; the group signal below is what
+    // the terminal sends on Ctrl-C. stdin is a file, so "is stdin a terminal" would get it wrong.
+    const count = join(home, "count");
+    const pgidFile = join(home, "pgid");
+    const counter =
+      "import os,signal,sys,time; n=[0]; signal.signal(signal.SIGINT, lambda *a: n.__setitem__(0, n[0]+1)); " +
+      "open(sys.argv[2],'w').write(str(os.getpgid(0))); time.sleep(2); open(sys.argv[1],'w').write(str(n[0]))";
+    const q = (a: string) => `'${a.replaceAll("'", `'\\''`)}'`;
+    const line = [process.execPath, join(import.meta.dir, "..", "index.ts"), "tunnel", "db:5432", "-P", PROJECT_ID, "--", "python3", "-c", counter, count, pgidFile]
+      .map(q)
+      .join(" ");
+    const shell = `${line} < /dev/null`;
+    const argv = process.platform === "darwin" ? ["script", "-q", "/dev/null", "sh", "-c", shell] : ["script", "-qec", shell, "/dev/null"];
+    const proc = Bun.spawn(argv, { stdin: "ignore", stdout: "ignore", stderr: "ignore", env: env() });
+    try {
+      await until(() => existsSync(pgidFile) && readFileSync(pgidFile, "utf8") !== "");
+      process.kill(-Number(readFileSync(pgidFile, "utf8")), "SIGINT");
+      await until(() => existsSync(count));
+      expect(readFileSync(count, "utf8")).toBe("1");
+      await proc.exited;
+      await until(() => deleted.length === 1);
+      expect(deleted).toEqual(created);
+    } finally {
+      // On failure, stop zops too (not only `script`), or its teardown lands in the next test.
+      const pgid = existsSync(pgidFile) ? Number(readFileSync(pgidFile, "utf8")) : 0;
+      if (pgid) {
+        try {
+          process.kill(-pgid, "SIGTERM");
+        } catch {}
+        await until(() => !alive(-pgid)).catch(() => {});
+      }
+      proc.kill("SIGKILL");
+      await proc.exited;
+    }
+  });
+
+  test("a bare ZOPS_WIREPROXY name is looked up on PATH", async () => {
+    const dir = join(import.meta.dir, "fixtures");
+    const { exitCode, stderr } = await run(["tunnel", "db:5432", "-P", PROJECT_ID, "--", "true"], {
+      ZOPS_WIREPROXY: "fake-wireproxy.ts",
+      PATH: `${dir}:${process.env.PATH}`,
+    });
+    expect(stderr).not.toContain("does not exist");
+    expect(exitCode).toBe(0);
+    expect(deleted).toEqual(created);
   });
 
   test("--json after -- does not switch zops's own errors to JSON", async () => {
