@@ -334,3 +334,11 @@ Discovered while building this; none of it is documented upstream:
   uses `/user/info`.
 - **Backups can be tagged at creation** via the API, so a protected backup *can* be taken
   headlessly — the container-side `zsc backup-create` is what lacks the flag.
+- **`ConfigureAutoscaling` reads different keys than the spec names.** The spec's
+  `customAutoscaling.verticalAutoscalingNullable` / `horizontalAutoscalingNullable` are ignored,
+  the block counts as empty and the service drops to its type's defaults, with a 200. The server
+  reads `verticalAutoscaling` / `horizontalAutoscaling`, and the body replaces the whole custom
+  block, so every field is sent back (inherited ones as `null`, taken from `customAutoscaling`,
+  not the resolved `currentAutoscaling`). `zops scale set` and `zops apply` build that body in
+  `src/lib/autoscaling.ts` and read the service back to confirm it. In zops 0.4.1 and older they
+  used the spec's keys and reset every service they scaled.

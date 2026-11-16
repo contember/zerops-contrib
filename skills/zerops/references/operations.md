@@ -148,9 +148,28 @@ update path, and `override: true` works only for runtime services, where it *rep
 and forces a redeploy.
 
 To change CPU mode, min/max CPU/RAM/disk, thresholds or container count on an existing service:
-**GUI → service → Automatic scaling configuration**, or the REST API. Everything except the
-`:single`/`:ha` variant can be changed there. PostgreSQL's `profile` can also be changed at any
-time.
+**GUI → service → Automatic scaling configuration**, `zops scale set`, or the REST API. Everything
+except the `:single`/`:ha` variant can be changed there. PostgreSQL's `profile` can also be changed
+at any time.
+
+Calling `PUT /service-stack/{id}/autoscaling` directly has three traps, none of them in the spec:
+
+- **The spec's key names are wrong.** It names the blocks `verticalAutoscalingNullable` and
+  `horizontalAutoscalingNullable`. The server ignores those keys, treats the block as empty and
+  **clears the service's own settings** back to the type's defaults, answering 200 all the same.
+  Send `customAutoscaling.verticalAutoscaling` and `customAutoscaling.horizontalAutoscaling`, the
+  keys the service reports.
+- **The body replaces the whole custom block.** A key left out is not "keep it". Send every field:
+  `cpuMode`, `startCpuCoreCount`, `swapEnabled`, `minFreeResource`, `minResource`, `maxResource`
+  and, where the service has a container range, both container counts. Echo
+  `autoscalingProfileId` and `autoscalingProfileOverrides` when the service carries them.
+- **Read the untouched fields from `customAutoscaling`, not `currentAutoscaling`.** The current
+  block fills inherited values in with the type's or profile's defaults; sending those back pins
+  them. In the custom block an inherited value is `null`, and `null` is what to send for it
+  (`minFreeResource` as an object of four `null`s).
+
+The write is queued: a 200 means accepted. Re-read the service and compare `currentAutoscaling`
+before relying on the change. `zops scale set` does all of this, including the check.
 
 Decide from evidence: **GUI → Service containers & Overview** shows CPU, RAM and disk over time,
 container-count changes, and past scaling events.
