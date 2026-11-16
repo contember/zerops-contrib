@@ -287,7 +287,7 @@ describe("zops scale set", () => {
     expect(body.customAutoscaling.horizontalAutoscaling).toEqual({ minContainerCount: 1, maxContainerCount: 3 });
   });
 
-  test("a database on a profile gets no container block, no pinned defaults, and keeps its profile", async () => {
+  test("a database on a profile gets no container block, keeps inherited CPU mode, start CPU, swap and thresholds as null, and keeps its profile", async () => {
     expect((await zops(["scale", "set", "db", "--max-ram", "16"])).exitCode).toBe(0);
     expect(writes[0]!.body).toEqual({
       autoscalingProfileId: "oltp-hobby",
