@@ -1,38 +1,39 @@
 /**
  * Autoscaling configuration.
  *
- * The API takes a nested `customAutoscaling` object where every field is nullable and null means
- * "inherit the profile". Sending a partial object would wipe the fields you left out, so a set
- * always reads the current configuration first and merges the requested changes into it.
+ * The endpoint replaces the service's whole custom configuration, and the spec names its keys
+ * wrong, so `scale set` reads the service, merges the flags into a complete body
+ * (`lib/autoscaling.ts` says which value comes from where), sends it, and then reads the service
+ * back to check the change took.
  */
 import type { CommandSpec } from "../lib/spec.ts";
 import { settleProcess } from "../lib/process.ts";
 import { usage } from "../lib/errors.ts";
+import {
+  autoscalingBody,
+  checkLimits,
+  describeChanges,
+  limitsOf,
+  verifyAutoscaling,
+  type AutoscalingChanges,
+  type ServiceAutoscaling,
+} from "../lib/autoscaling.ts";
 
-interface Resource {
-  cpuCoreCount?: number | null;
-  memoryGBytes?: number | null;
-  diskGBytes?: number | null;
-}
-
-interface VerticalAutoscaling {
-  cpuMode?: string | null;
-  minResource?: Resource;
-  maxResource?: Resource;
-  startCpuCoreCount?: number | null;
-  swapEnabled?: boolean | null;
-  minFreeResource?: Record<string, number | null>;
-}
-
-interface HorizontalAutoscaling {
-  minContainerCount?: number | null;
-  maxContainerCount?: number | null;
-}
-
-interface CurrentAutoscaling {
-  verticalAutoscaling?: VerticalAutoscaling | null;
-  horizontalAutoscaling?: HorizontalAutoscaling | null;
-}
+/** Flag name → the field it changes. */
+const FLAG_FIELDS = {
+  "min-cpu": "minCpu",
+  "max-cpu": "maxCpu",
+  "min-ram": "minRamGB",
+  "max-ram": "maxRamGB",
+  "min-disk": "minDiskGB",
+  "max-disk": "maxDiskGB",
+  "min-containers": "minContainers",
+  "max-containers": "maxContainers",
+  "cpu-mode": "cpuMode",
+  "start-cpu": "startCpuCoreCount",
+  swap: "swapEnabled",
+  "autoscaling-profile": "autoscalingProfileId",
+} as const satisfies Record<string, keyof AutoscalingChanges>;
 
 export const scaleCommands: CommandSpec[] = [
   {
@@ -42,22 +43,11 @@ export const scaleCommands: CommandSpec[] = [
     examples: ["zops scale get api", "zops scale get api --json"],
     operations: ["GetServiceStack"],
     async run(ctx, parsed) {
-      const service = await ctx.service(parsed.args[0]);
-      const current = (service.currentAutoscaling ?? {}) as CurrentAutoscaling;
+      const service = (await ctx.service(parsed.args[0])) as ServiceAutoscaling & { name: string };
       ctx.out.data({
         service: service.name,
         autoscalingProfileId: service.autoscalingProfileId ?? null,
-        cpuMode: current.verticalAutoscaling?.cpuMode ?? null,
-        minCpu: current.verticalAutoscaling?.minResource?.cpuCoreCount ?? null,
-        maxCpu: current.verticalAutoscaling?.maxResource?.cpuCoreCount ?? null,
-        minRamGB: current.verticalAutoscaling?.minResource?.memoryGBytes ?? null,
-        maxRamGB: current.verticalAutoscaling?.maxResource?.memoryGBytes ?? null,
-        minDiskGB: current.verticalAutoscaling?.minResource?.diskGBytes ?? null,
-        maxDiskGB: current.verticalAutoscaling?.maxResource?.diskGBytes ?? null,
-        minContainers: current.horizontalAutoscaling?.minContainerCount ?? null,
-        maxContainers: current.horizontalAutoscaling?.maxContainerCount ?? null,
-        startCpuCoreCount: current.verticalAutoscaling?.startCpuCoreCount ?? null,
-        swapEnabled: current.verticalAutoscaling?.swapEnabled ?? null,
+        ...limitsOf(service.currentAutoscaling),
       });
     },
   },
@@ -66,9 +56,17 @@ export const scaleCommands: CommandSpec[] = [
     summary: "Change a service's scaling limits.",
     description: `Only the values you pass change; everything else keeps its current setting.
 
+zops reads the service, sends its complete configuration with your values merged in, and reads
+it back: if the service does not report what was sent, it exits 8 and lists the fields that
+differ. --dry-run prints the full body without sending it.
+
+Every limit zops sends becomes the service's own, and own limits override an autoscaling
+profile. --autoscaling-profile switches the profile and keeps the limits the service already
+owns (the output lists them); only inherited ones follow the new profile.
+
 Runtime and Linux-container services scale horizontally between 1 and 10 containers. Managed
-services have a fixed container count decided by their :single / :ha type and reject
---min-containers / --max-containers.`,
+services have a fixed container count decided by their :single / :ha type; zops refuses
+--min-containers / --max-containers for them (exit 2) without sending anything.`,
     args: [{ name: "service", description: "Service hostname or id. Defaults to --service." }],
     flags: [
       { name: "min-cpu", type: "number", placeholder: "<cores>", description: "Minimum CPU cores." },
@@ -89,66 +87,50 @@ services have a fixed container count decided by their :single / :ha type and re
       "zops scale set api --min-containers 2 --max-containers 5",
       "zops scale set api --max-cpu 8 --max-ram 16 --cpu-mode DEDICATED",
       "zops scale set db --autoscaling-profile oltp-production",
-      "zops scale set api --min-containers 2 --dry-run --json",
+      "zops scale set api --max-cpu 4 --dry-run --json",
     ],
     operations: ["GetServiceStack", "ConfigureAutoscaling"],
     async run(ctx, parsed) {
-      const service = await ctx.service(parsed.args[0]);
-      const current = (service.currentAutoscaling ?? {}) as CurrentAutoscaling;
-
-      const num = (name: string) => ctx.flag<number>(name);
-      const touched = [
-        "min-cpu", "max-cpu", "min-ram", "max-ram", "min-disk", "max-disk",
-        "min-containers", "max-containers", "cpu-mode", "start-cpu", "swap", "autoscaling-profile",
-      ].filter((f) => ctx.flags[f] !== undefined);
+      const changes: AutoscalingChanges = {};
+      for (const [flag, field] of Object.entries(FLAG_FIELDS)) {
+        if (ctx.flags[flag] === undefined) continue;
+        (changes as Record<string, unknown>)[field] = flag === "swap" ? ctx.bool("swap") : ctx.flags[flag];
+      }
+      const touched = Object.keys(FLAG_FIELDS).filter((f) => ctx.flags[f] !== undefined);
 
       if (touched.length === 0) {
         throw usage(
           "nothing to change",
-          "Pass at least one of --min-cpu, --max-cpu, --min-ram, --max-ram, --min-containers, --max-containers, --cpu-mode, --autoscaling-profile. Run `zops scale get` to see current values.",
+          "Pass at least one of --min-cpu, --max-cpu, --min-ram, --max-ram, --min-disk, --max-disk, --min-containers, --max-containers, --cpu-mode, --start-cpu, --swap, --autoscaling-profile. Run `zops scale get` to see current values.",
         );
       }
 
-      const vertical: VerticalAutoscaling = {
-        cpuMode: ctx.flag<string>("cpu-mode") ?? current.verticalAutoscaling?.cpuMode ?? null,
-        startCpuCoreCount: num("start-cpu") ?? current.verticalAutoscaling?.startCpuCoreCount ?? null,
-        swapEnabled: ctx.flags.swap !== undefined ? ctx.bool("swap") : (current.verticalAutoscaling?.swapEnabled ?? null),
-        minResource: {
-          cpuCoreCount: num("min-cpu") ?? current.verticalAutoscaling?.minResource?.cpuCoreCount ?? null,
-          memoryGBytes: num("min-ram") ?? current.verticalAutoscaling?.minResource?.memoryGBytes ?? null,
-          diskGBytes: num("min-disk") ?? current.verticalAutoscaling?.minResource?.diskGBytes ?? null,
-        },
-        maxResource: {
-          cpuCoreCount: num("max-cpu") ?? current.verticalAutoscaling?.maxResource?.cpuCoreCount ?? null,
-          memoryGBytes: num("max-ram") ?? current.verticalAutoscaling?.maxResource?.memoryGBytes ?? null,
-          diskGBytes: num("max-disk") ?? current.verticalAutoscaling?.maxResource?.diskGBytes ?? null,
-        },
-      };
-
-      const horizontal: HorizontalAutoscaling = {
-        minContainerCount: num("min-containers") ?? current.horizontalAutoscaling?.minContainerCount ?? null,
-        maxContainerCount: num("max-containers") ?? current.horizontalAutoscaling?.maxContainerCount ?? null,
-      };
-
-      const body = {
-        ...(ctx.flag<string>("autoscaling-profile")
-          ? { autoscalingProfileId: ctx.flag<string>("autoscaling-profile") }
-          : {}),
-        customAutoscaling: {
-          verticalAutoscalingNullable: vertical,
-          horizontalAutoscalingNullable: horizontal,
-        },
-      };
+      const service = (await ctx.service(parsed.args[0])) as ServiceAutoscaling & { id: string; name: string };
+      const body = autoscalingBody(service, changes);
+      checkLimits(body);
+      const planned = describeChanges(body, service);
 
       if (ctx.dryRun) {
-        return { dryRun: true, operation: "ConfigureAutoscaling", service: service.name, changed: touched, body };
+        return { dryRun: true, operation: "ConfigureAutoscaling", service: service.name, changed: touched, changes: planned, body };
       }
 
       const proc = await ctx.api.call<{ id: string }>("ConfigureAutoscaling", {
         path: { id: service.id },
         body,
       });
-      ctx.out.data(await settleProcess(ctx, proc, `rescaling ${service.name}`));
+      const settled = await settleProcess(ctx, proc, `rescaling ${service.name}`);
+      if (!ctx.wait) {
+        ctx.out.data({ ...settled, changes: planned, verified: false });
+        return;
+      }
+      const after = await verifyAutoscaling(ctx, service.id, service.name, body);
+      ctx.out.data({
+        ...settled,
+        changes: planned,
+        verified: true,
+        autoscalingProfileId: after.autoscalingProfileId ?? null,
+        ...limitsOf(after.currentAutoscaling),
+      });
     },
   },
 ];

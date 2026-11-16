@@ -22,6 +22,16 @@ import type { CommandSpec } from "../lib/spec.ts";
 import type { Context, ServiceSummary } from "../lib/context.ts";
 import { settleProcess } from "../lib/process.ts";
 import { EXIT, ZopsError, usage } from "../lib/errors.ts";
+import {
+  autoscalingBody,
+  checkLimits,
+  describeChanges,
+  hasContainerRange,
+  verifyAutoscaling,
+  type AutoscalingChanges,
+  type AutoscalingRequest,
+  type ServiceAutoscaling,
+} from "../lib/autoscaling.ts";
 
 interface DeclaredService {
   hostname?: string;
@@ -49,26 +59,6 @@ interface Declaration {
   services?: DeclaredService[];
 }
 
-interface Resource {
-  cpuCoreCount?: number | null;
-  memoryGBytes?: number | null;
-  diskGBytes?: number | null;
-}
-
-interface CurrentAutoscaling {
-  verticalAutoscaling?: {
-    cpuMode?: string | null;
-    startCpuCoreCount?: number | null;
-    swapEnabled?: boolean | null;
-    minResource?: Resource;
-    maxResource?: Resource;
-  } | null;
-  horizontalAutoscaling?: {
-    minContainerCount?: number | null;
-    maxContainerCount?: number | null;
-  } | null;
-}
-
 interface UserData {
   id: string;
   key: string;
@@ -80,6 +70,8 @@ interface Action {
   service: string;
   kind: string;
   detail: string;
+  /** The request body, where there is one: shown by `--dry-run --json` so the plan can be checked. */
+  body?: unknown;
   /** Absent means this is drift the platform cannot converge in place. */
   apply?: (ctx: Context) => Promise<unknown>;
 }
@@ -177,68 +169,47 @@ function typeMatches(declared: string, actual: string): boolean {
 }
 
 /**
- * Autoscaling is one endpoint taking a whole object, so a partial body would
- * wipe whatever it omits. Every change merges into the current configuration.
+ * The declared scaling as changes to the service's current configuration. The
+ * endpoint replaces the whole custom block, so the body is built complete by
+ * `lib/autoscaling.ts`, the same way `zops scale set` builds it.
  */
-function autoscalingBody(
-  declared: DeclaredService,
-  current: CurrentAutoscaling,
-): { body: Record<string, unknown>; changes: string[] } {
+export function declaredScaling(declared: DeclaredService): AutoscalingChanges {
   const vertical = declared.verticalAutoscaling ?? {};
-  const changes: string[] = [];
-
-  const horizontalCurrent = current.horizontalAutoscaling ?? {};
-  const minContainers = declared.minContainers ?? horizontalCurrent.minContainerCount ?? null;
-  const maxContainers = declared.maxContainers ?? horizontalCurrent.maxContainerCount ?? null;
-  if (declared.minContainers !== undefined && declared.minContainers !== horizontalCurrent.minContainerCount) {
-    changes.push(`minContainers ${horizontalCurrent.minContainerCount ?? "-"} → ${declared.minContainers}`);
-  }
-  if (declared.maxContainers !== undefined && declared.maxContainers !== horizontalCurrent.maxContainerCount) {
-    changes.push(`maxContainers ${horizontalCurrent.maxContainerCount ?? "-"} → ${declared.maxContainers}`);
-  }
-
-  const verticalCurrent = current.verticalAutoscaling ?? {};
-  const pairs: [keyof NonNullable<DeclaredService["verticalAutoscaling"]>, number | null | undefined, string][] = [
-    ["minCpu", verticalCurrent.minResource?.cpuCoreCount, "minCpu"],
-    ["maxCpu", verticalCurrent.maxResource?.cpuCoreCount, "maxCpu"],
-    ["minRam", verticalCurrent.minResource?.memoryGBytes, "minRam"],
-    ["maxRam", verticalCurrent.maxResource?.memoryGBytes, "maxRam"],
-    ["minDisk", verticalCurrent.minResource?.diskGBytes, "minDisk"],
-    ["maxDisk", verticalCurrent.maxResource?.diskGBytes, "maxDisk"],
-  ];
-  for (const [key, actual, label] of pairs) {
-    const wanted = vertical[key];
-    if (wanted !== undefined && wanted !== actual) {
-      changes.push(`${label} ${actual ?? "-"} → ${wanted}`);
-    }
-  }
-  if (vertical.cpuMode !== undefined && vertical.cpuMode !== verticalCurrent.cpuMode) {
-    changes.push(`cpuMode ${verticalCurrent.cpuMode ?? "-"} → ${vertical.cpuMode}`);
-  }
-
-  const body = {
-    customAutoscaling: {
-      verticalAutoscalingNullable: {
-        cpuMode: vertical.cpuMode ?? verticalCurrent.cpuMode ?? null,
-        startCpuCoreCount: vertical.startCpuCoreCount ?? verticalCurrent.startCpuCoreCount ?? null,
-        swapEnabled: verticalCurrent.swapEnabled ?? null,
-        minResource: {
-          cpuCoreCount: vertical.minCpu ?? verticalCurrent.minResource?.cpuCoreCount ?? null,
-          memoryGBytes: vertical.minRam ?? verticalCurrent.minResource?.memoryGBytes ?? null,
-          diskGBytes: vertical.minDisk ?? verticalCurrent.minResource?.diskGBytes ?? null,
-        },
-        maxResource: {
-          cpuCoreCount: vertical.maxCpu ?? verticalCurrent.maxResource?.cpuCoreCount ?? null,
-          memoryGBytes: vertical.maxRam ?? verticalCurrent.maxResource?.memoryGBytes ?? null,
-          diskGBytes: vertical.maxDisk ?? verticalCurrent.maxResource?.diskGBytes ?? null,
-        },
-      },
-      horizontalAutoscalingNullable: {
-        minContainerCount: minContainers,
-        maxContainerCount: maxContainers,
-      },
-    },
+  const changes: AutoscalingChanges = {
+    minCpu: vertical.minCpu,
+    maxCpu: vertical.maxCpu,
+    minRamGB: vertical.minRam,
+    maxRamGB: vertical.maxRam,
+    minDiskGB: vertical.minDisk,
+    maxDiskGB: vertical.maxDisk,
+    cpuMode: vertical.cpuMode,
+    startCpuCoreCount: vertical.startCpuCoreCount,
+    minContainers: declared.minContainers,
+    maxContainers: declared.maxContainers,
   };
+  for (const key of Object.keys(changes) as (keyof AutoscalingChanges)[]) {
+    if (changes[key] === undefined) delete changes[key];
+  }
+  return changes;
+}
+
+/** The body to send and what it changes; no body when the declaration already holds. */
+export function scalingPlan(
+  declared: DeclaredService,
+  actual: ServiceAutoscaling,
+): { body: AutoscalingRequest; changes: string[] } | null {
+  const wanted = declaredScaling(declared);
+  // A managed service's count is fixed by its :single / :ha type and it reports no range, so a
+  // declared count is neither compared nor sent: otherwise every run would plan it again.
+  if (!hasContainerRange(actual)) {
+    delete wanted.minContainers;
+    delete wanted.maxContainers;
+  }
+  if (Object.keys(wanted).length === 0) return null;
+  const body = autoscalingBody(actual, wanted);
+  const changes = describeChanges(body, actual);
+  if (changes.length === 0) return null;
+  checkLimits(body);
   return { body, changes };
 }
 
@@ -279,18 +250,28 @@ async function reconcileService(
     });
   }
 
-  const scaling = autoscalingBody(declared, (actual.currentAutoscaling ?? {}) as CurrentAutoscaling);
-  if (scaling.changes.length > 0) {
+  let scaling: ReturnType<typeof scalingPlan> = null;
+  try {
+    scaling = scalingPlan(declared, actual as ServiceAutoscaling);
+  } catch (err) {
+    if (!(err instanceof ZopsError)) throw err;
+    actions.push({ service: hostname, kind: "drift:scale", detail: `declared scaling is not valid: ${err.message}` });
+  }
+  if (scaling) {
+    const { body, changes } = scaling;
     actions.push({
       service: hostname,
       kind: "scale",
-      detail: scaling.changes.join(", "),
+      detail: changes.join(", "),
+      body,
       apply: async (c) => {
         const proc = await c.api.call<{ id: string }>("ConfigureAutoscaling", {
           path: { id: actual.id },
-          body: scaling.body,
+          body,
         });
-        return settleProcess(c, proc, `rescaling ${hostname}`);
+        const settled = await settleProcess(c, proc, `rescaling ${hostname}`);
+        if (c.wait) await verifyAutoscaling(c, actual.id, hostname, body);
+        return settled;
       },
     });
   }
@@ -521,7 +502,13 @@ Run it with --dry-run first: the plan is the same in both modes, only the execut
 
       if (ctx.dryRun) {
         ctx.out.data(
-          actions.map(({ service, kind, detail }) => ({ service, kind, detail, applied: false })),
+          actions.map(({ service, kind, detail, body }) => ({
+            service,
+            kind,
+            detail,
+            ...(body === undefined ? {} : { body }),
+            applied: false,
+          })),
           {
             columns: [
               { key: "service", header: "SERVICE" },

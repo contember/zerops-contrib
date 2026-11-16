@@ -203,7 +203,7 @@ A large part of day-2 management has no `zcli` command. Do not invent one — re
 |---|---|---|
 | Restart a service | `zops service restart` | `zcp` `zerops_manage`, GUI (Restart), or `zcli service stop` + `start` |
 | Reload a service | `zops service reload` | `zcp` `zerops_manage`, or GUI. Note a reload does **not** re-read environment variables |
-| Change scaling / CPU mode / container count | `zops scale set` | `zcp` `zerops_scale`, GUI → **Automatic scaling configuration**, or REST |
+| Change scaling / CPU mode / container count | `zops scale set` (only the values you pass change; checked after) | `zcp` `zerops_scale`, GUI → **Automatic scaling configuration**, or REST, whose body has traps: see [`operations.md`](operations.md#changing-scaling-on-a-live-service) |
 | Set or read env vars beyond `zcli project env` | `zops env set` / `zops env show` | `zcp` `zerops_env`, GUI, or REST `/user-data`, `/project-env` |
 | Read service events, deploy history | `zops process list`, `zops version list` | `zcp` `zerops_events`, GUI, or REST |
 | Health / HTTP readiness probe | — | `zcp` `zerops_verify` |
