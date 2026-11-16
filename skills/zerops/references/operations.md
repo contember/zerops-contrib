@@ -163,10 +163,12 @@ Calling `PUT /service-stack/{id}/autoscaling` directly has three traps, none of 
   `cpuMode`, `startCpuCoreCount`, `swapEnabled`, `minFreeResource`, `minResource`, `maxResource`
   and, where the service has a container range, both container counts. Echo
   `autoscalingProfileId` and `autoscalingProfileOverrides` when the service carries them.
-- **Read the untouched fields from `customAutoscaling`, not `currentAutoscaling`.** The current
-  block fills inherited values in with the type's or profile's defaults; sending those back pins
-  them. In the custom block an inherited value is `null`, and `null` is what to send for it
-  (`minFreeResource` as an object of four `null`s).
+- **Take each untouched field from the right block.** `currentAutoscaling` fills inherited values
+  in with the type's or profile's defaults, and sending one back pins it. Echo `cpuMode`,
+  `startCpuCoreCount`, `swapEnabled` and `minFreeResource` from `customAutoscaling`, `null` where
+  inherited (`minFreeResource` as an object of four `null`s). Send the min/max limits and
+  container counts from `currentAutoscaling`, as the GUI does: they become the service's own and
+  override a profile. A `null` limit inside `minResource` / `maxResource` has not been seen to work.
 
 The write is queued: a 200 means accepted. Re-read the service and compare `currentAutoscaling`
 before relying on the change. `zops scale set` does all of this, including the check.
