@@ -26,6 +26,7 @@ import {
   autoscalingBody,
   checkLimits,
   describeChanges,
+  hasContainerRange,
   verifyAutoscaling,
   type AutoscalingChanges,
   type AutoscalingRequest,
@@ -69,6 +70,8 @@ interface Action {
   service: string;
   kind: string;
   detail: string;
+  /** The request body, where there is one: shown by `--dry-run --json` so the plan can be checked. */
+  body?: unknown;
   /** Absent means this is drift the platform cannot converge in place. */
   apply?: (ctx: Context) => Promise<unknown>;
 }
@@ -196,6 +199,12 @@ export function scalingPlan(
   actual: ServiceAutoscaling,
 ): { body: AutoscalingRequest; changes: string[] } | null {
   const wanted = declaredScaling(declared);
+  // A managed service's count is fixed by its :single / :ha type and it reports no range, so a
+  // declared count is neither compared nor sent: otherwise every run would plan it again.
+  if (!hasContainerRange(actual)) {
+    delete wanted.minContainers;
+    delete wanted.maxContainers;
+  }
   if (Object.keys(wanted).length === 0) return null;
   const body = autoscalingBody(actual, wanted);
   const changes = describeChanges(body, actual);
@@ -254,6 +263,7 @@ async function reconcileService(
       service: hostname,
       kind: "scale",
       detail: changes.join(", "),
+      body,
       apply: async (c) => {
         const proc = await c.api.call<{ id: string }>("ConfigureAutoscaling", {
           path: { id: actual.id },
@@ -492,7 +502,13 @@ Run it with --dry-run first: the plan is the same in both modes, only the execut
 
       if (ctx.dryRun) {
         ctx.out.data(
-          actions.map(({ service, kind, detail }) => ({ service, kind, detail, applied: false })),
+          actions.map(({ service, kind, detail, body }) => ({
+            service,
+            kind,
+            detail,
+            ...(body === undefined ? {} : { body }),
+            applied: false,
+          })),
           {
             columns: [
               { key: "service", header: "SERVICE" },

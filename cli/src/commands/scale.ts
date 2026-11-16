@@ -60,9 +60,13 @@ zops reads the service, sends its complete configuration with your values merged
 it back: if the service does not report what was sent, it exits 8 and lists the fields that
 differ. --dry-run prints the full body without sending it.
 
+Every limit zops sends becomes the service's own, and own limits override an autoscaling
+profile. --autoscaling-profile switches the profile and keeps the limits the service already
+owns (the output lists them); only inherited ones follow the new profile.
+
 Runtime and Linux-container services scale horizontally between 1 and 10 containers. Managed
-services have a fixed container count decided by their :single / :ha type and reject
---min-containers / --max-containers.`,
+services have a fixed container count decided by their :single / :ha type; zops refuses
+--min-containers / --max-containers for them (exit 2) without sending anything.`,
     args: [{ name: "service", description: "Service hostname or id. Defaults to --service." }],
     flags: [
       { name: "min-cpu", type: "number", placeholder: "<cores>", description: "Minimum CPU cores." },

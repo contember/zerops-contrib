@@ -115,8 +115,9 @@ function resolve(own: AutoscalingBlock | null | undefined, defaults: Autoscaling
 
 let server: ReturnType<typeof Bun.serve>;
 let services: Service[] = [];
-/** `honest` applies the write; `ignores` accepts it and changes nothing. */
-let mode: "honest" | "ignores" = "honest";
+/** `honest` applies the write; `ignores` accepts it and changes nothing; `dropsThresholds`
+ *  applies it but loses `minFreeResource`. */
+let mode: "honest" | "ignores" | "dropsThresholds" = "honest";
 const writes: { method: string; path: string; body: unknown }[] = [];
 
 beforeAll(() => {
@@ -138,13 +139,19 @@ beforeAll(() => {
       const scale = path.match(/^\/service-stack\/(\w+)\/autoscaling$/);
       const target = scale && services.find((s) => s.id === scale[1]);
       if (req.method === "PUT" && target) {
-        if (mode === "honest") {
+        if (mode !== "ignores") {
           const sent = body as { customAutoscaling?: AutoscalingBlock & Record<string, unknown>; autoscalingProfileId?: string | null };
           // Unknown keys are dropped, so the spec's `...Nullable` spelling arrives as an empty block.
           const own: AutoscalingBlock = {
             verticalAutoscaling: sent.customAutoscaling?.verticalAutoscaling ?? null,
             horizontalAutoscaling: sent.customAutoscaling?.horizontalAutoscaling ?? null,
           };
+          if (mode === "dropsThresholds" && own.verticalAutoscaling) {
+            own.verticalAutoscaling = {
+              ...own.verticalAutoscaling,
+              minFreeResource: { cpuCoreCount: null, cpuCorePercent: null, memoryGBytes: null, memoryPercent: null },
+            };
+          }
           target.customAutoscaling = own;
           target.currentAutoscaling = resolve(own, RUNTIME_DEFAULTS);
           if (sent.autoscalingProfileId !== undefined) target.autoscalingProfileId = sent.autoscalingProfileId;
@@ -313,6 +320,36 @@ describe("zops scale set", () => {
     expect(exitCode).toBe(2);
     expect(stderr).toContain("minCpu 10 is above maxCpu 8");
     expect(writes).toEqual([]);
+  });
+
+  test("container counts on a managed database are refused before anything is sent", async () => {
+    for (const flags of [["--max-containers", "3"], ["--min-containers", "1"], ["--max-ram", "16", "--max-containers", "3"]]) {
+      const { exitCode, stderr } = await zops(["scale", "set", "db", ...flags]);
+      expect(exitCode).toBe(2);
+      expect(stderr).toContain("no container range");
+    }
+    expect((await zops(["scale", "set", "db", "--max-containers", "3", "--dry-run", "--json"])).exitCode).toBe(2);
+    expect(writes).toEqual([]);
+  });
+
+  test("a write that loses the service's own thresholds fails the read-back", async () => {
+    mode = "dropsThresholds";
+    const { exitCode, stderr } = await zops(["scale", "set", "app", "--max-cpu", "4", "--timeout", "1s"]);
+    expect(exitCode).toBe(8);
+    expect(stderr).toContain("minFreeResource.memoryGBytes: wanted 0.25, service reports -");
+    expect(stderr).toContain("minFreeResource.memoryPercent: wanted 25, service reports -");
+    // Inherited thresholds were sent as null, so they are not checked.
+    expect(stderr).not.toContain("minFreeResource.cpuCoreCount");
+  });
+
+  test("a profile switch lists the own limits that keep overriding the new profile", async () => {
+    const { stdout, exitCode } = await zops(["scale", "set", "app", "--autoscaling-profile", "some-profile", "--max-cpu", "4", "--dry-run", "--json"]);
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(stdout).changes).toEqual([
+      "maxCpu 8 → 4",
+      "autoscalingProfileId - → some-profile",
+      "kept as the service's own, over the profile: minCpu 1, minRamGB 1, maxRamGB 8, minDiskGB 1, maxDiskGB 250, minContainers 1, maxContainers 1",
+    ]);
   });
 
   test("nothing to change is a usage error", async () => {

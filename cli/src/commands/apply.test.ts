@@ -119,6 +119,33 @@ test("declared scaling merges into the current configuration under the keys the 
   });
 });
 
+/** A managed database on a profile: no own vertical block, no container range. */
+const database = {
+  autoscalingProfileId: "oltp-hobby",
+  autoscalingProfileOverrides: null,
+  customAutoscaling: { horizontalAutoscaling: { minContainerCount: null, maxContainerCount: null }, verticalAutoscaling: null },
+  currentAutoscaling: {
+    horizontalAutoscaling: { minContainerCount: null, maxContainerCount: null },
+    verticalAutoscaling: {
+      cpuMode: "SHARED",
+      startCpuCoreCount: 2,
+      swapEnabled: true,
+      minFreeResource: { cpuCoreCount: 0.1, cpuCorePercent: 15, memoryGBytes: 0.125, memoryPercent: 15 },
+      minResource: { cpuCoreCount: 1, memoryGBytes: 0.25, diskGBytes: 1 },
+      maxResource: { cpuCoreCount: 8, memoryGBytes: 48, diskGBytes: 250 },
+    },
+  },
+};
+
+test("declared container counts on a managed database are neither planned nor sent", () => {
+  // Otherwise every run would plan `minContainers - → 1` again and fail its read-back.
+  expect(scalingPlan({ hostname: "db", minContainers: 1, maxContainers: 1 }, database)).toBeNull();
+
+  const plan = scalingPlan({ hostname: "db", minContainers: 1, maxContainers: 1, verticalAutoscaling: { maxRam: 16 } }, database);
+  expect(plan?.changes).toEqual(["maxRamGB 48 → 16"]);
+  expect(plan?.body.customAutoscaling.horizontalAutoscaling).toBeUndefined();
+});
+
 test("declared scaling that already holds plans nothing", () => {
   expect(scalingPlan({ hostname: "app", minContainers: 1, verticalAutoscaling: { maxCpu: 8 } }, runtime)).toBeNull();
   expect(scalingPlan({ hostname: "app" }, runtime)).toBeNull();

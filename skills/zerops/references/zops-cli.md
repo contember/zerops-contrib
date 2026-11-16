@@ -178,8 +178,11 @@ Deliberate limits, because the alternative is worse than drift:
 - **`zops scale set` changes only the values you pass, and checks that they took.** It reads the
   service, sends its complete scaling configuration with your flags merged in, then reads it back
   and exits 8 with the fields that differ if the service does not report what was sent.
-  `--dry-run --json` prints the full body. A minimum above its maximum after the merge is refused
-  before anything is sent. `zops scale set` and the `scale` step of `zops apply` in zops 0.4.1 and
+  `--dry-run --json` prints the full body. A minimum above its maximum after the merge, and
+  container counts on a managed service (fixed by `:single` / `:ha`), are refused before anything
+  is sent; `zops apply` skips declared container counts for such a service. Every limit sent
+  becomes the service's own and overrides an autoscaling profile, so `--autoscaling-profile`
+  keeps the limits the service already owns and lists them. `zops scale set` and the `scale` step of `zops apply` in zops 0.4.1 and
   older sent the autoscaling block under the spec's key names, which the API ignores: every call
   reset the service's own settings to its type's defaults (one runtime came back at CPU 1–8,
   RAM 0.125–48 GB, containers 1–10) and the passed values did not take either.

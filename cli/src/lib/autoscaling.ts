@@ -147,7 +147,10 @@ export function hasContainerRange(service: ServiceAutoscaling): boolean {
  *
  * A profile change is the one exception to "limits come from the resolved view": pinning the old
  * profile's resolved numbers would keep the new profile from applying, so then only the service's
- * own limits are sent and inherited ones stay `null`.
+ * own limits are sent and inherited ones stay `null`. Own limits still override the new profile;
+ * `describeChanges` lists them so that is visible.
+ *
+ * Throws a usage error for container counts on a service without a container range.
  */
 export function autoscalingBody(service: ServiceAutoscaling, changes: AutoscalingChanges): AutoscalingRequest {
   const own = limitsOf(service.customAutoscaling);
@@ -182,8 +185,15 @@ export function autoscalingBody(service: ServiceAutoscaling, changes: Autoscalin
     },
   };
 
-  const containersAsked = changes.minContainers !== undefined || changes.maxContainers !== undefined;
-  if (hasContainerRange(service) || containersAsked) {
+  // A managed service's count is fixed by its :single / :ha type. What the server does with a
+  // horizontal block for one has never been seen, so it is refused here rather than sent.
+  if (!hasContainerRange(service) && (changes.minContainers !== undefined || changes.maxContainers !== undefined)) {
+    throw usage(
+      "this service has no container range to set",
+      "A managed service's container count is fixed by its :single / :ha type. Drop --min-containers / --max-containers.",
+    );
+  }
+  if (hasContainerRange(service)) {
     body.customAutoscaling.horizontalAutoscaling = {
       minContainerCount: pick("minContainers", base),
       maxContainerCount: pick("maxContainers", base),
@@ -265,6 +275,16 @@ export function autoscalingDiff(body: AutoscalingRequest, service: ServiceAutosc
   if (body.autoscalingProfileId !== undefined && (service.autoscalingProfileId ?? null) !== body.autoscalingProfileId) {
     diff.push({ field: "autoscalingProfileId", wanted: body.autoscalingProfileId, actual: service.autoscalingProfileId ?? null });
   }
+  // The thresholds are echoed, not changed, so a write that dropped them would pass the checks
+  // above. Their own values are compared with the own block; an inherited (null) one is not.
+  const sentFree = body.customAutoscaling.verticalAutoscaling.minFreeResource;
+  const ownFree = service.customAutoscaling?.verticalAutoscaling?.minFreeResource;
+  for (const key of Object.keys(sentFree) as (keyof MinFreeResource)[]) {
+    const wanted = sentFree[key];
+    if (wanted === null) continue;
+    const got = ownFree?.[key] ?? null;
+    if (!same(wanted, got)) diff.push({ field: `minFreeResource.${key}`, wanted, actual: got });
+  }
   return diff;
 }
 
@@ -278,9 +298,16 @@ export function describeChanges(body: AutoscalingRequest, service: ServiceAutosc
   }
   if (body.autoscalingProfileId !== undefined && body.autoscalingProfileId !== (service.autoscalingProfileId ?? null)) {
     lines.push(`autoscalingProfileId ${service.autoscalingProfileId ?? "-"} → ${body.autoscalingProfileId}`);
+    // The service's own limits go on overriding the new profile; say which ones.
+    const kept = Object.entries(intendedLimits(body))
+      .filter(([field, value]) => RANGE_FIELDS.has(field as LimitField) && same(value, before[field as LimitField]))
+      .map(([field, value]) => `${field} ${value}`);
+    if (kept.length > 0) lines.push(`kept as the service's own, over the profile: ${kept.join(", ")}`);
   }
   return lines;
 }
+
+const RANGE_FIELDS = new Set<LimitField>(PAIRS.flat());
 
 /** How long the read-back waits for a queued change to show, at most. */
 const SETTLE_MS = 60_000;
