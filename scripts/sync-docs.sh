@@ -274,7 +274,7 @@ table("Static, containers and VMs", [
 table("Databases", [
     ("PostgreSQL", imp("postgresql")), ("MariaDB", imp("mariadb")),
     ("ClickHouse", imp("clickhouse")), ("Valkey", imp("valkey")),
-    ("KeyDB (legacy)", imp("keydb")), ("Qdrant", imp("qdrant")),
+    ("Qdrant", imp("qdrant")),
 ], header="Database")
 
 table("Search engines", [
@@ -303,7 +303,7 @@ if missing:
 KNOWN = {
     "alpine", "ubuntu", "go", "php", "dotnet", "nodejs", "python", "ruby", "rust",
     "bun", "deno", "elixir", "gleam", "java", "nginx", "static", "docker",
-    "mariadb", "postgresql", "keydb", "valkey", "qdrant", "nats", "kafka",
+    "mariadb", "postgresql", "valkey", "qdrant", "nats", "kafka",
     "elasticsearch", "meilisearch", "typesense", "rabbitmq", "clickhouse",
     "seaweedfs", "localstorage", "objectstorage", "swarm", "zbox",
 }

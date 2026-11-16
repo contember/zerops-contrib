@@ -201,7 +201,8 @@ Username is always `default`. **Auth is mandatory** — a bare `redis://<hostnam
 ### KeyDB (legacy)
 
 `hostname`, `port` `6379`, `connectionString` `redis://<hostname>:6379`, password in the GUI.
-No TLS; cannot be exposed publicly. Prefer Valkey for new projects.
+No TLS; cannot be exposed publicly. Zerops dropped KeyDB from its docs and import type list in
+November 2026, so it has no row in the version tables. Use Valkey for new projects.
 
 ### Object storage
 
@@ -496,7 +497,6 @@ Managed services take a `:single` / `:ha` deployment variant where listed. The l
 | MariaDB | `mariadb@10.6` |
 | ClickHouse | `clickhouse@25.3` |
 | Valkey | `valkey@7.2` |
-| KeyDB (legacy) | `keydb@6` |
 | Qdrant | `qdrant@1.12`<br>`qdrant@1.10` |
 
 ### Search engines
