@@ -6,7 +6,7 @@
  * round trip untouched — the platform expands it after this, not before.
  */
 import { expect, test } from "bun:test";
-import { emitYaml, servicesDocument } from "./apply.ts";
+import { emitYaml, scalingPlan, servicesDocument } from "./apply.ts";
 
 test("round-trips scalars, nesting and lists", () => {
   const value = {
@@ -71,4 +71,55 @@ test("emits a multi-line value as a block scalar", () => {
   const emitted = emitYaml(value);
   expect(emitted).toContain("|");
   expect(Bun.YAML.parse(emitted)).toEqual({ key: "line one\nline two\n" });
+});
+
+/* Scaling goes through the same body builder as `zops scale set`; these pin that `apply` sends
+   the keys the server reads and keeps what the declaration does not mention. */
+const runtime = {
+  autoscalingProfileId: null,
+  autoscalingProfileOverrides: null,
+  customAutoscaling: {
+    horizontalAutoscaling: { minContainerCount: 1, maxContainerCount: 1 },
+    verticalAutoscaling: {
+      cpuMode: "SHARED",
+      startCpuCoreCount: 2,
+      swapEnabled: true,
+      minFreeResource: { cpuCoreCount: null, cpuCorePercent: null, memoryGBytes: 0.25, memoryPercent: 25 },
+      minResource: { cpuCoreCount: 1, memoryGBytes: 1, diskGBytes: 1 },
+      maxResource: { cpuCoreCount: 8, memoryGBytes: 8, diskGBytes: 250 },
+    },
+  },
+  currentAutoscaling: {
+    horizontalAutoscaling: { minContainerCount: 1, maxContainerCount: 1 },
+    verticalAutoscaling: {
+      cpuMode: "SHARED",
+      startCpuCoreCount: 2,
+      swapEnabled: true,
+      minFreeResource: { cpuCoreCount: 0.1, cpuCorePercent: 0, memoryGBytes: 0.25, memoryPercent: 25 },
+      minResource: { cpuCoreCount: 1, memoryGBytes: 1, diskGBytes: 1 },
+      maxResource: { cpuCoreCount: 8, memoryGBytes: 8, diskGBytes: 250 },
+    },
+  },
+};
+
+test("declared scaling merges into the current configuration under the keys the server reads", () => {
+  const plan = scalingPlan({ hostname: "app", verticalAutoscaling: { maxCpu: 4, maxRam: 4 } }, runtime);
+  expect(plan?.changes).toEqual(["maxCpu 8 → 4", "maxRamGB 8 → 4"]);
+  expect(JSON.stringify(plan?.body)).not.toContain("Nullable");
+  expect(plan?.body.customAutoscaling).toEqual({
+    verticalAutoscaling: {
+      cpuMode: "SHARED",
+      startCpuCoreCount: 2,
+      swapEnabled: true,
+      minFreeResource: { cpuCoreCount: null, cpuCorePercent: null, memoryGBytes: 0.25, memoryPercent: 25 },
+      minResource: { cpuCoreCount: 1, memoryGBytes: 1, diskGBytes: 1 },
+      maxResource: { cpuCoreCount: 4, memoryGBytes: 4, diskGBytes: 250 },
+    },
+    horizontalAutoscaling: { minContainerCount: 1, maxContainerCount: 1 },
+  });
+});
+
+test("declared scaling that already holds plans nothing", () => {
+  expect(scalingPlan({ hostname: "app", minContainers: 1, verticalAutoscaling: { maxCpu: 8 } }, runtime)).toBeNull();
+  expect(scalingPlan({ hostname: "app" }, runtime)).toBeNull();
 });
